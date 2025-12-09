@@ -1,0 +1,60 @@
+//go:build darwin
+
+package main
+
+import (
+	"image"
+	"image/color"
+	"log"
+
+	"github.com/tinyrange/gowin/internal/graphics"
+)
+
+func main() {
+	gfx, err := graphics.New("Pure Go Cocoa + GL Demo", 800, 600)
+	if err != nil {
+		log.Fatalf("init: %v", err)
+	}
+
+	gfx.SetClear(true)
+	gfx.SetClearColor(0.1, 0.12, 0.16, 1.0)
+
+	tex, err := makeCheckerTexture(gfx)
+	if err != nil {
+		log.Fatalf("texture: %v", err)
+	}
+
+	const quadSize = 200.0
+
+	err = gfx.Loop(func(f graphics.Frame) error {
+		_, h := f.WindowSize()
+		mx, my := f.CursorPos()
+		half := float32(quadSize / 2)
+		x := mx - half
+		y := float32(h) - my - half
+
+		f.RenderQuad(x, y, float32(quadSize), float32(quadSize), tex)
+		return nil
+	})
+	if err != nil {
+		log.Fatalf("run loop: %v", err)
+	}
+}
+
+func makeCheckerTexture(gfx graphics.Window) (graphics.Texture, error) {
+	img := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	red := color.NRGBA{R: 0xff, G: 0x66, B: 0x66, A: 0xff}
+	green := color.NRGBA{R: 0x66, G: 0xff, B: 0x66, A: 0xff}
+
+	for y := range 4 {
+		for x := range 4 {
+			if (x+y)%2 == 0 {
+				img.Set(x, y, red)
+			} else {
+				img.Set(x, y, green)
+			}
+		}
+	}
+
+	return gfx.NewTexture(img)
+}

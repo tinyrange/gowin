@@ -1,0 +1,115 @@
+//go:build darwin
+
+package gl
+
+import (
+	"unsafe"
+
+	"github.com/ebitengine/purego"
+)
+
+type openGL struct {
+	clearColor    func(float32, float32, float32, float32)
+	clear         func(uint32)
+	viewport      func(int32, int32, int32, int32)
+	enable        func(uint32)
+	genTextures   func(int32, *uint32)
+	bindTexture   func(uint32, uint32)
+	texImage2D    func(uint32, int32, int32, int32, int32, int32, uint32, uint32, unsafe.Pointer)
+	texParameteri func(uint32, uint32, int32)
+	begin         func(uint32)
+	end           func()
+	texCoord2f    func(float32, float32)
+	vertex2f      func(float32, float32)
+	ortho         func(float64, float64, float64, float64, float64, float64)
+	matrixMode    func(uint32)
+	loadIdentity  func()
+}
+
+func (gl *openGL) ClearColor(r, g, b, a float32) {
+	gl.clearColor(r, g, b, a)
+}
+
+func (gl *openGL) Clear(mask uint32) {
+	gl.clear(mask)
+}
+
+func (gl *openGL) Viewport(x, y, width, height int32) {
+	gl.viewport(x, y, width, height)
+}
+
+func (gl *openGL) Enable(cap uint32) {
+	gl.enable(cap)
+}
+
+func (gl *openGL) GenTextures(n int32, textures *uint32) {
+	gl.genTextures(n, textures)
+}
+
+func (gl *openGL) BindTexture(target, texture uint32) {
+	gl.bindTexture(target, texture)
+}
+
+func (gl *openGL) TexImage2D(target uint32, level, internalFormat, width, height, border int32, format, xtype uint32, pixels unsafe.Pointer) {
+	gl.texImage2D(target, level, internalFormat, width, height, border, format, xtype, pixels)
+}
+
+func (gl *openGL) TexParameteri(target, pname uint32, param int32) {
+	gl.texParameteri(target, pname, param)
+}
+
+func (gl *openGL) Begin(mode uint32) {
+	gl.begin(mode)
+}
+
+func (gl *openGL) End() {
+	gl.end()
+}
+
+func (gl *openGL) TexCoord2f(s, t float32) {
+	gl.texCoord2f(s, t)
+}
+
+func (gl *openGL) Vertex2f(x, y float32) {
+	gl.vertex2f(x, y)
+}
+
+func (gl *openGL) Ortho(left, right, bottom, top, zNear, zFar float64) {
+	gl.ortho(left, right, bottom, top, zNear, zFar)
+}
+
+func (gl *openGL) MatrixMode(mode uint32) {
+	gl.matrixMode(mode)
+}
+
+func (gl *openGL) LoadIdentity() {
+	gl.loadIdentity()
+}
+
+func Load() (OpenGL, error) {
+	handle, err := purego.Dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL", purego.RTLD_GLOBAL|purego.RTLD_LAZY)
+	if err != nil {
+		return nil, err
+	}
+	register := func(dst interface{}, name string) {
+		purego.RegisterLibFunc(dst, handle, name)
+	}
+
+	gl := &openGL{}
+	register(&gl.clearColor, "glClearColor")
+	register(&gl.clear, "glClear")
+	register(&gl.viewport, "glViewport")
+	register(&gl.enable, "glEnable")
+	register(&gl.genTextures, "glGenTextures")
+	register(&gl.bindTexture, "glBindTexture")
+	register(&gl.texImage2D, "glTexImage2D")
+	register(&gl.texParameteri, "glTexParameteri")
+	register(&gl.begin, "glBegin")
+	register(&gl.end, "glEnd")
+	register(&gl.texCoord2f, "glTexCoord2f")
+	register(&gl.vertex2f, "glVertex2f")
+	register(&gl.ortho, "glOrtho")
+	register(&gl.matrixMode, "glMatrixMode")
+	register(&gl.loadIdentity, "glLoadIdentity")
+	return gl, nil
+}

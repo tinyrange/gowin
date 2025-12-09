@@ -1,0 +1,12 @@
+package window
+
+import "github.com/tinyrange/gowin/internal/gl"
+
+type Window interface {
+	GL() (gl.OpenGL, error)
+	Close()
+	Poll() bool
+	Swap()
+	BackingSize() (width, height int)
+	Cursor() (x, y float32)
+}
