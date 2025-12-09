@@ -8,6 +8,7 @@ import (
 	"log"
 
 	"github.com/tinyrange/gowin/internal/graphics"
+	"github.com/tinyrange/gowin/internal/text"
 )
 
 func main() {
@@ -24,6 +25,11 @@ func main() {
 		log.Fatalf("texture: %v", err)
 	}
 
+	font, err := text.Load(gfx)
+	if err != nil {
+		log.Fatalf("font: %v", err)
+	}
+
 	const quadSize = 200.0
 
 	err = gfx.Loop(func(f graphics.Frame) error {
@@ -34,6 +40,8 @@ func main() {
 		y := float32(h) - my - half
 
 		f.RenderQuad(x, y, float32(quadSize), float32(quadSize), tex)
+
+		font.RenderText(f, "Hello, World", 10, 10)
 		return nil
 	})
 	if err != nil {
