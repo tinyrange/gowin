@@ -1,5 +1,3 @@
-//go:build darwin
-
 package graphics
 
 import (
@@ -12,7 +10,7 @@ import (
 	"github.com/tinyrange/gowin/internal/window"
 )
 
-type macWindow struct {
+type glWindow struct {
 	platform window.Window
 	gl       glpkg.OpenGL
 
@@ -20,18 +18,18 @@ type macWindow struct {
 	clearColor   [4]float32
 }
 
-type macTexture struct {
+type glTexture struct {
 	id uint32
 	w  int
 	h  int
 }
 
-type macFrame struct {
-	w *macWindow
+type glFrame struct {
+	w *glWindow
 }
 
 // Screenshot implements Frame.
-func (f macFrame) Screenshot() (image.Image, error) {
+func (f glFrame) Screenshot() (image.Image, error) {
 	bw, bh := f.w.platform.BackingSize()
 	rgba := image.NewRGBA(image.Rect(0, 0, bw, bh))
 	f.w.gl.ReadPixels(0, 0, int32(bw), int32(bh), glpkg.RGBA, glpkg.UnsignedByte, unsafe.Pointer(&rgba.Pix[0]))
@@ -69,7 +67,7 @@ func newWithProfile(title string, width, height int, useCoreProfile bool) (Windo
 	gl.Enable(glpkg.Blend)
 	gl.BlendFunc(glpkg.SrcAlpha, glpkg.OneMinusSrcAlpha)
 
-	return &macWindow{
+	return &glWindow{
 		platform:     platform,
 		gl:           gl,
 		clearEnabled: true,
@@ -77,11 +75,11 @@ func newWithProfile(title string, width, height int, useCoreProfile bool) (Windo
 	}, nil
 }
 
-func (w *macWindow) PlatformWindow() window.Window {
+func (w *glWindow) PlatformWindow() window.Window {
 	return w.platform
 }
 
-func (w *macWindow) NewTexture(img image.Image) (Texture, error) {
+func (w *glWindow) NewTexture(img image.Image) (Texture, error) {
 	nrgba := image.NewNRGBA(img.Bounds())
 	draw.Draw(nrgba, nrgba.Bounds(), img, img.Bounds().Min, draw.Src)
 
@@ -105,21 +103,21 @@ func (w *macWindow) NewTexture(img image.Image) (Texture, error) {
 		)
 	}
 
-	return &macTexture{id: texID, w: nrgba.Rect.Dx(), h: nrgba.Rect.Dy()}, nil
+	return &glTexture{id: texID, w: nrgba.Rect.Dx(), h: nrgba.Rect.Dy()}, nil
 }
 
-func (w *macWindow) SetClear(enabled bool) {
+func (w *glWindow) SetClear(enabled bool) {
 	w.clearEnabled = enabled
 }
 
-func (w *macWindow) SetClearColor(r, g, b, a float32) {
+func (w *glWindow) SetClearColor(r, g, b, a float32) {
 	w.clearColor = [4]float32{r, g, b, a}
 }
 
-func (w *macWindow) Loop(step func(f Frame) error) error {
+func (w *glWindow) Loop(step func(f Frame) error) error {
 	defer w.platform.Close()
 
-	frame := macFrame{w: w}
+	frame := glFrame{w: w}
 	for w.platform.Poll() {
 		w.prepareFrame()
 
@@ -133,7 +131,7 @@ func (w *macWindow) Loop(step func(f Frame) error) error {
 	return nil
 }
 
-func (w *macWindow) prepareFrame() {
+func (w *glWindow) prepareFrame() {
 	bw, bh := w.platform.BackingSize()
 
 	w.gl.Viewport(0, 0, int32(bw), int32(bh))
@@ -149,24 +147,24 @@ func (w *macWindow) prepareFrame() {
 	}
 }
 
-func (f macFrame) WindowSize() (int, int) {
+func (f glFrame) WindowSize() (int, int) {
 	return f.w.platform.BackingSize()
 }
 
-func (f macFrame) CursorPos() (float32, float32) {
+func (f glFrame) CursorPos() (float32, float32) {
 	return f.w.platform.Cursor()
 }
 
-func (f macFrame) GetKeyState(window.Key) KeyState {
+func (f glFrame) GetKeyState(window.Key) KeyState {
 	return KeyStateUp
 }
 
-func (f macFrame) GetButtonState(window.Button) ButtonState {
+func (f glFrame) GetButtonState(window.Button) ButtonState {
 	return ButtonStateUp
 }
 
-func (f macFrame) RenderQuad(x, y, width, height float32, tex Texture, color [4]float32) {
-	t, ok := tex.(*macTexture)
+func (f glFrame) RenderQuad(x, y, width, height float32, tex Texture, color [4]float32) {
+	t, ok := tex.(*glTexture)
 	if !ok {
 		return
 	}
@@ -186,6 +184,6 @@ func (f macFrame) RenderQuad(x, y, width, height float32, tex Texture, color [4]
 	f.w.gl.End()
 }
 
-func (t *macTexture) Size() (int, int) {
+func (t *glTexture) Size() (int, int) {
 	return t.w, t.h
 }

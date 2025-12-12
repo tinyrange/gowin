@@ -1,5 +1,3 @@
-//go:build darwin
-
 package main
 
 import (
@@ -12,7 +10,7 @@ import (
 )
 
 func main() {
-	gfx, err := graphics.New("Pure Go Cocoa + GL Demo", 800, 600)
+	gfx, err := graphics.New("Pure Go GL Demo", 800, 600)
 	if err != nil {
 		log.Fatalf("init: %v", err)
 	}
