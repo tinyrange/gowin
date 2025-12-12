@@ -4,6 +4,8 @@ package window
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -17,18 +19,23 @@ const (
 	csVRedraw = 0x0001
 
 	wsOverlappedWindow = 0x00CF0000
+	wsClipSiblings     = 0x04000000
+	wsClipChildren     = 0x02000000
 	swShow             = 5
 
-	wmClose       = 0x0010
-	wmDestroy     = 0x0002
-	pmRemove      = 0x0001
-	swpShowWindow = 0x0040
+	wmClose   = 0x0010
+	wmDestroy = 0x0002
+	pmRemove  = 0x0001
 
 	pfdTypeRGBA      = 0
 	pfdMainPlane     = 0
 	pfdDrawToWindow  = 0x00000004
 	pfdSupportOpenGL = 0x00000020
 	pfdDoubleBuffer  = 0x00000001
+
+	cwUseDefault = 0x80000000
+
+	errorClassAlreadyExists = 1410
 )
 
 type (
@@ -74,33 +81,34 @@ type rect struct {
 	bottom int32
 }
 
+// Mirrors PIXELFORMATDESCRIPTOR (must be 40 bytes).
 type pixelFormatDescriptor struct {
-	nSize          uint16
-	nVersion       uint16
-	dwFlags        uint32
-	iPixelType     byte
-	colorBits      byte
-	redBits        byte
-	redShift       byte
-	greenBits      byte
-	greenShift     byte
-	blueBits       byte
-	blueShift      byte
-	alphaBits      byte
-	alphaShift     byte
-	accumBits      byte
-	accumRedBits   byte
-	accumGreenBits byte
-	accumBlueBits  byte
-	accumAlphaBits byte
-	depthBits      byte
-	stencilBits    byte
-	auxBuffers     byte
-	layerType      byte
-	bReserved      byte
-	dwLayerMask    uint32
-	dwVisibleMask  uint32
-	dwDamageMask   uint32
+	nSize           uint16
+	nVersion        uint16
+	dwFlags         uint32
+	iPixelType      byte
+	cColorBits      byte
+	cRedBits        byte
+	cRedShift       byte
+	cGreenBits      byte
+	cGreenShift     byte
+	cBlueBits       byte
+	cBlueShift      byte
+	cAlphaBits      byte
+	cAlphaShift     byte
+	cAccumBits      byte
+	cAccumRedBits   byte
+	cAccumGreenBits byte
+	cAccumBlueBits  byte
+	cAccumAlphaBits byte
+	cDepthBits      byte
+	cStencilBits    byte
+	cAuxBuffers     byte
+	iLayerType      byte
+	bReserved       byte
+	dwLayerMask     uint32
+	dwVisibleMask   uint32
+	dwDamageMask    uint32
 }
 
 var (
@@ -124,22 +132,83 @@ var (
 	procGetCursorPos     = user32.NewProc("GetCursorPos")
 	procScreenToClient   = user32.NewProc("ScreenToClient")
 	procUpdateWindow     = user32.NewProc("UpdateWindow")
+	procWindowFromDC     = user32.NewProc("WindowFromDC")
+	procLoadCursor       = user32.NewProc("LoadCursorW")
 
-	procChoosePixelFormat = gdi32.NewProc("ChoosePixelFormat")
-	procSetPixelFormat    = gdi32.NewProc("SetPixelFormat")
-	procSwapBuffers       = gdi32.NewProc("SwapBuffers")
+	procChoosePixelFormat   = gdi32.NewProc("ChoosePixelFormat")
+	procDescribePixelFormat = gdi32.NewProc("DescribePixelFormat")
+	procGetPixelFormat      = gdi32.NewProc("GetPixelFormat")
+	procSetPixelFormat      = gdi32.NewProc("SetPixelFormat")
+	procSwapBuffers         = gdi32.NewProc("SwapBuffers")
+	procGetObjectType       = gdi32.NewProc("GetObjectType")
 
 	procWglCreateContext = opengl32.NewProc("wglCreateContext")
 	procWglMakeCurrent   = opengl32.NewProc("wglMakeCurrent")
 	procWglDeleteContext = opengl32.NewProc("wglDeleteContext")
 
 	procGetModuleHandle = kernel32.NewProc("GetModuleHandleW")
+	procSetLastError    = kernel32.NewProc("SetLastError")
+	procGetLastError    = kernel32.NewProc("GetLastError")
 )
 
+func mustFindProc(p *syscall.LazyProc) error {
+	if err := p.Find(); err != nil {
+		return fmt.Errorf("missing procedure %q: %w", p.Name, err)
+	}
+	return nil
+}
+
+func validateProcs() error {
+	procs := []*syscall.LazyProc{
+		procRegisterClassEx,
+		procCreateWindowEx,
+		procGetDC,
+		procReleaseDC,
+		procDescribePixelFormat,
+		procSetPixelFormat,
+		procGetPixelFormat,
+		procWglCreateContext,
+		procWglMakeCurrent,
+		procWglDeleteContext,
+	}
+	for _, p := range procs {
+		if err := mustFindProc(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func init() {
+	if err := validateProcs(); err != nil {
+		panic(err)
+	}
+}
+
 var (
-	windowClass = syscall.StringToUTF16Ptr("GoWin32Window")
-	currentWin  *winWindow
+	// Make the class name unique per-process to avoid CS_OWNDC collisions.
+	windowClassName = fmt.Sprintf("GoWin32Window_%d", os.Getpid())
+	windowClass     = syscall.StringToUTF16Ptr(windowClassName)
+
+	currentWin *winWindow
 )
+
+func lastError() syscall.Errno {
+	e, _, _ := procGetLastError.Call()
+	return syscall.Errno(e)
+}
+
+func clearLastError() {
+	procSetLastError.Call(0)
+}
+
+func winErr(op string) error {
+	e := lastError()
+	if e == 0 {
+		return fmt.Errorf("%s failed", op)
+	}
+	return fmt.Errorf("%s failed: %w", op, e)
+}
 
 type winWindow struct {
 	hwnd    hwnd
@@ -151,31 +220,59 @@ type winWindow struct {
 func New(title string, width, height int, _ bool) (Window, error) {
 	runtime.LockOSThread()
 
+	if unsafe.Sizeof(pixelFormatDescriptor{}) != 40 {
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf(
+			"PIXELFORMATDESCRIPTOR size mismatch: got %d, want 40",
+			unsafe.Sizeof(pixelFormatDescriptor{}),
+		)
+	}
+
 	if err := registerWindowClass(); err != nil {
 		runtime.UnlockOSThread()
 		return nil, err
 	}
 
-	hwnd, hdc, err := createWindow(title, width, height)
+	hwd, hdc, err := createWindow(title, width, height)
 	if err != nil {
 		runtime.UnlockOSThread()
 		return nil, err
 	}
 
-	if err := setupPixelFormat(hdc); err != nil {
-		user32.NewProc("DestroyWindow").Call(uintptr(hwnd))
+	// Sanity check: DC belongs to this window.
+	clearLastError()
+	wfdc, _, _ := procWindowFromDC.Call(uintptr(hdc))
+	if hwnd(wfdc) != hwd {
+		procReleaseDC.Call(uintptr(hwd), uintptr(hdc))
+		procDestroyWindow.Call(uintptr(hwd))
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf(
+			"HDC does not belong to HWND (WindowFromDC=%#x hwnd=%#x)",
+			wfdc,
+			uintptr(hwd),
+		)
+	}
+
+	if _, _, err := chooseAndSetPixelFormat(hdc); err != nil {
+		procReleaseDC.Call(uintptr(hwd), uintptr(hdc))
+		procDestroyWindow.Call(uintptr(hwd))
 		runtime.UnlockOSThread()
 		return nil, err
 	}
 
 	ctx, err := createGLContext(hdc)
 	if err != nil {
-		user32.NewProc("DestroyWindow").Call(uintptr(hwnd))
+		procReleaseDC.Call(uintptr(hwd), uintptr(hdc))
+		procDestroyWindow.Call(uintptr(hwd))
 		runtime.UnlockOSThread()
 		return nil, err
 	}
 
-	win := &winWindow{hwnd: hwnd, hdc: hdc, ctx: ctx, running: true}
+	// Show only after pixel format + context are established.
+	procShowWindow.Call(uintptr(hwd), swShow)
+	procUpdateWindow.Call(uintptr(hwd))
+
+	win := &winWindow{hwnd: hwd, hdc: hdc, ctx: ctx, running: true}
 	currentWin = win
 
 	return win, nil
@@ -210,7 +307,13 @@ func (w *winWindow) Poll() bool {
 
 	var m msg
 	for {
-		ret, _, _ := procPeekMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0, pmRemove)
+		ret, _, _ := procPeekMessage.Call(
+			uintptr(unsafe.Pointer(&m)),
+			0,
+			0,
+			0,
+			pmRemove,
+		)
 		if ret == 0 {
 			break
 		}
@@ -238,8 +341,8 @@ func (w *winWindow) BackingSize() (int, int) {
 
 func (w *winWindow) Cursor() (float32, float32) {
 	var p point
-	procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
-	if p.x != 0 || p.y != 0 {
+	ret, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+	if ret != 0 {
 		procScreenToClient.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&p)))
 	}
 	return float32(p.x), float32(p.y)
@@ -253,81 +356,229 @@ func registerWindowClass() error {
 		lpfnWndProc:   cb,
 		hInstance:     moduleHandle(),
 		hCursor:       loadCursor(),
+		hbrBackground: 0,
 		lpszClassName: windowClass,
 	}
 
+	clearLastError()
 	ret, _, err := procRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc)))
 	if ret == 0 {
-		// If the class already exists, RegisterClassEx returns 0 with ERROR_CLASS_ALREADY_EXISTS.
-		if errno, ok := err.(syscall.Errno); ok && errno == 1410 {
-			return nil
+		// If you ever hit this with the unique name, surface the actual error.
+		if errno, ok := err.(syscall.Errno); ok && int(errno) == errorClassAlreadyExists {
+			return fmt.Errorf("window class already exists unexpectedly: %s", windowClassName)
 		}
-		return err
+		return winErr("RegisterClassExW")
 	}
 	return nil
 }
 
 func createWindow(title string, width, height int) (win hwnd, dc hdc, err error) {
-	win = createNativeWindow(title, width, height)
-	if win == 0 {
-		return 0, 0, errors.New("CreateWindowExW failed")
-	}
-	procShowWindow.Call(uintptr(win), swShow)
-	procUpdateWindow.Call(uintptr(win))
-
-	ret, _, _ := procGetDC.Call(uintptr(win))
-	if ret == 0 {
-		procDestroyWindow.Call(uintptr(win))
-		return 0, 0, errors.New("GetDC failed")
-	}
-	return win, hdc(ret), nil
-}
-
-func createNativeWindow(title string, width, height int) hwnd {
 	titlePtr, _ := syscall.UTF16PtrFromString(title)
+
+	style := uint32(wsOverlappedWindow | wsClipSiblings | wsClipChildren)
+
+	clearLastError()
 	ret, _, _ := procCreateWindowEx.Call(
 		0,
 		uintptr(unsafe.Pointer(windowClass)),
 		uintptr(unsafe.Pointer(titlePtr)),
-		wsOverlappedWindow,
-		0x80000000, 0x80000000, // CW_USEDEFAULT
-		uintptr(width), uintptr(height),
-		0, 0, uintptr(moduleHandle()), 0,
+		uintptr(style),
+		cwUseDefault,
+		cwUseDefault,
+		uintptr(width),
+		uintptr(height),
+		0,
+		0,
+		uintptr(moduleHandle()),
+		0,
 	)
-	return hwnd(ret)
+	win = hwnd(ret)
+	if win == 0 {
+		return 0, 0, winErr("CreateWindowExW")
+	}
+
+	clearLastError()
+	dcRet, _, _ := procGetDC.Call(uintptr(win))
+	if dcRet == 0 {
+		procDestroyWindow.Call(uintptr(win))
+		return 0, 0, winErr("GetDC")
+	}
+
+	return win, hdc(dcRet), nil
 }
 
-func setupPixelFormat(hdc hdc) error {
-	var pfd pixelFormatDescriptor
-	pfd.nSize = uint16(unsafe.Sizeof(pfd))
-	pfd.nVersion = 1
-	pfd.dwFlags = pfdDrawToWindow | pfdSupportOpenGL | pfdDoubleBuffer
-	pfd.iPixelType = pfdTypeRGBA
-	pfd.colorBits = 24
-	pfd.depthBits = 24
-	pfd.layerType = pfdMainPlane
-
-	format, _, _ := procChoosePixelFormat.Call(uintptr(hdc), uintptr(unsafe.Pointer(&pfd)))
-	if format == 0 {
-		return errors.New("ChoosePixelFormat failed")
+func chooseAndSetPixelFormat(hdc hdc) (int32, pixelFormatDescriptor, error) {
+	desired := pixelFormatDescriptor{
+		nSize:        uint16(unsafe.Sizeof(pixelFormatDescriptor{})),
+		nVersion:     1,
+		dwFlags:      pfdDrawToWindow | pfdSupportOpenGL | pfdDoubleBuffer,
+		iPixelType:   pfdTypeRGBA,
+		cColorBits:   24,
+		cDepthBits:   24,
+		cStencilBits: 8,
+		iLayerType:   pfdMainPlane,
 	}
 
-	ok, _, _ := procSetPixelFormat.Call(uintptr(hdc), format, uintptr(unsafe.Pointer(&pfd)))
+	// Prefer ChoosePixelFormat; then set using the *described* PFD for that index.
+	clearLastError()
+	pf, _, _ := procChoosePixelFormat.Call(
+		uintptr(hdc),
+		uintptr(unsafe.Pointer(&desired)),
+	)
+	if pf == 0 {
+		return 0, pixelFormatDescriptor{}, winErr("ChoosePixelFormat")
+	}
+
+	var chosen pixelFormatDescriptor
+	clearLastError()
+	r, _, _ := procDescribePixelFormat.Call(
+		uintptr(hdc),
+		pf,
+		uintptr(unsafe.Sizeof(chosen)),
+		uintptr(unsafe.Pointer(&chosen)),
+	)
+	if r == 0 {
+		return 0, pixelFormatDescriptor{}, winErr("DescribePixelFormat")
+	}
+
+	const requiredFlags = pfdDrawToWindow | pfdSupportOpenGL | pfdDoubleBuffer
+	if (chosen.dwFlags&requiredFlags) != requiredFlags ||
+		chosen.iPixelType != pfdTypeRGBA ||
+		chosen.cColorBits < 24 {
+		// Fallback: strict enumeration to find a usable OpenGL format.
+		return enumAndSetPixelFormat(hdc, desired)
+	}
+
+	clearLastError()
+	ok, _, _ := procSetPixelFormat.Call(
+		uintptr(hdc),
+		pf,
+		uintptr(unsafe.Pointer(&chosen)),
+	)
 	if ok == 0 {
-		return errors.New("SetPixelFormat failed")
+		return 0, pixelFormatDescriptor{}, fmt.Errorf(
+			"SetPixelFormat failed for index %d: %w",
+			pf,
+			winErr("SetPixelFormat"),
+		)
 	}
-	return nil
+
+	clearLastError()
+	got, _, _ := procGetPixelFormat.Call(uintptr(hdc))
+	if got == 0 {
+		return 0, pixelFormatDescriptor{}, errors.New(
+			"GetPixelFormat returned 0 after SetPixelFormat",
+		)
+	}
+	if got != pf {
+		return 0, pixelFormatDescriptor{}, fmt.Errorf(
+			"GetPixelFormat mismatch: got=%d want=%d",
+			got,
+			pf,
+		)
+	}
+
+	return int32(pf), chosen, nil
+}
+
+func enumAndSetPixelFormat(
+	hdc hdc,
+	desired pixelFormatDescriptor,
+) (int32, pixelFormatDescriptor, error) {
+	var pfd pixelFormatDescriptor
+
+	clearLastError()
+	maxFormats, _, _ := procDescribePixelFormat.Call(
+		uintptr(hdc),
+		1,
+		uintptr(unsafe.Sizeof(pfd)),
+		uintptr(unsafe.Pointer(&pfd)),
+	)
+	if maxFormats == 0 {
+		return 0, pixelFormatDescriptor{}, winErr("DescribePixelFormat(count)")
+	}
+
+	var chosenFormat uintptr
+	var chosenPFD pixelFormatDescriptor
+
+	for i := uintptr(1); i <= maxFormats; i++ {
+		clearLastError()
+		ret, _, _ := procDescribePixelFormat.Call(
+			uintptr(hdc),
+			i,
+			uintptr(unsafe.Sizeof(pfd)),
+			uintptr(unsafe.Pointer(&pfd)),
+		)
+		if ret == 0 {
+			continue
+		}
+
+		const requiredFlags = pfdDrawToWindow | pfdSupportOpenGL | pfdDoubleBuffer
+		if (pfd.dwFlags & requiredFlags) != requiredFlags {
+			continue
+		}
+		if pfd.iPixelType != pfdTypeRGBA {
+			continue
+		}
+		if pfd.cColorBits < desired.cColorBits {
+			continue
+		}
+		if pfd.cDepthBits < desired.cDepthBits {
+			continue
+		}
+		if pfd.cStencilBits < desired.cStencilBits {
+			continue
+		}
+		if pfd.iLayerType != pfdMainPlane {
+			continue
+		}
+
+		chosenFormat = i
+		chosenPFD = pfd
+		break
+	}
+
+	if chosenFormat == 0 {
+		return 0, pixelFormatDescriptor{}, errors.New(
+			"failed to find a suitable OpenGL pixel format",
+		)
+	}
+
+	clearLastError()
+	ok, _, _ := procSetPixelFormat.Call(
+		uintptr(hdc),
+		chosenFormat,
+		uintptr(unsafe.Pointer(&chosenPFD)),
+	)
+	if ok == 0 {
+		return 0, pixelFormatDescriptor{}, winErr("SetPixelFormat(enum)")
+	}
+
+	clearLastError()
+	got, _, _ := procGetPixelFormat.Call(uintptr(hdc))
+	if got == 0 {
+		return 0, pixelFormatDescriptor{}, errors.New(
+			"GetPixelFormat returned 0 after SetPixelFormat (enum path)",
+		)
+	}
+
+	return int32(chosenFormat), chosenPFD, nil
 }
 
 func createGLContext(hdc hdc) (hglrc, error) {
+	clearLastError()
 	ctx, _, _ := procWglCreateContext.Call(uintptr(hdc))
 	if ctx == 0 {
-		return 0, errors.New("wglCreateContext failed")
+		return 0, winErr("wglCreateContext")
 	}
-	if ret, _, _ := procWglMakeCurrent.Call(uintptr(hdc), ctx); ret == 0 {
+
+	clearLastError()
+	ret, _, _ := procWglMakeCurrent.Call(uintptr(hdc), ctx)
+	if ret == 0 {
 		procWglDeleteContext.Call(ctx)
-		return 0, errors.New("wglMakeCurrent failed")
+		return 0, winErr("wglMakeCurrent")
 	}
+
 	return hglrc(ctx), nil
 }
 
@@ -349,13 +600,14 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 }
 
 func loadCursor() syscall.Handle {
-	loadCursorProc := user32.NewProc("LoadCursorW")
 	const idcArrow = 32512
-	ret, _, _ := loadCursorProc.Call(0, uintptr(idcArrow))
+	clearLastError()
+	ret, _, _ := procLoadCursor.Call(0, uintptr(idcArrow))
 	return syscall.Handle(ret)
 }
 
 func moduleHandle() syscall.Handle {
+	clearLastError()
 	h, _, _ := procGetModuleHandle.Call(0)
 	return syscall.Handle(h)
 }

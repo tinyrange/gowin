@@ -1,10 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"log"
+	"os"
 
+	"github.com/tinyrange/gowin/internal/gl"
 	"github.com/tinyrange/gowin/internal/graphics"
 	"github.com/tinyrange/gowin/internal/text"
 )
@@ -14,6 +18,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("init: %v", err)
 	}
+
+	ogl, err := gfx.PlatformWindow().GL()
+	if err != nil {
+		log.Fatalf("gl: %v", err)
+	}
+
+	log.Printf("OpenGL version: %s", ogl.GetString(gl.Version))
+	log.Printf("OpenGL vendor: %s", ogl.GetString(gl.Vendor))
 
 	gfx.SetClear(true)
 	gfx.SetClearColor(0.1, 0.12, 0.16, 1.0)
@@ -37,25 +49,25 @@ func main() {
 
 		font.RenderText("The quick brown fox jumps over the lazy dog.", 10, 24, 16, [4]float32{1, 1, 0, 1})
 
-		// screenshot, err := f.Screenshot()
-		// if err != nil {
-		// 	log.Fatalf("screenshot: %v", err)
-		// }
+		screenshot, err := f.Screenshot()
+		if err != nil {
+			log.Fatalf("screenshot: %v", err)
+		}
 
-		// screenshotPath := "screenshot.png"
+		screenshotPath := "screenshot.png"
 
-		// file, err := os.Create(screenshotPath)
-		// if err != nil {
-		// 	return fmt.Errorf("create screenshot file: %v", err)
-		// }
-		// defer file.Close()
+		file, err := os.Create(screenshotPath)
+		if err != nil {
+			return fmt.Errorf("create screenshot file: %v", err)
+		}
+		defer file.Close()
 
-		// if err := png.Encode(file, screenshot); err != nil {
-		// 	return fmt.Errorf("encode screenshot: %v", err)
-		// }
+		if err := png.Encode(file, screenshot); err != nil {
+			return fmt.Errorf("encode screenshot: %v", err)
+		}
 
-		// return fmt.Errorf("taken screenshot at %s", screenshotPath)
-		return nil
+		return fmt.Errorf("taken screenshot at %s", screenshotPath)
+		// return nil
 	})
 	if err != nil {
 		log.Fatalf("run loop: %v", err)

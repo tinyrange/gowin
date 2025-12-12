@@ -30,6 +30,7 @@ type openGL struct {
 	loadIdentity  func()
 	blendFunc     func(uint32, uint32)
 	readPixels    func(int32, int32, int32, int32, uint32, uint32, unsafe.Pointer)
+	getString     func(uint32) *byte
 }
 
 func (gl *openGL) ClearColor(r, g, b, a float32) {
@@ -118,6 +119,11 @@ func (gl *openGL) ReadPixels(x, y, width, height int32, format, xtype uint32, pi
 	gl.readPixels(x, y, width, height, format, xtype, pixels)
 }
 
+func (gl *openGL) GetString(name uint32) string {
+	ptr := gl.getString(name)
+	return gostring((*byte)(unsafe.Pointer(ptr)))
+}
+
 func Load() (OpenGL, error) {
 	handle, err := purego.Dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL", purego.RTLD_GLOBAL|purego.RTLD_LAZY)
 	if err != nil {
@@ -149,5 +155,6 @@ func Load() (OpenGL, error) {
 	register(&gl.loadIdentity, "glLoadIdentity")
 	register(&gl.blendFunc, "glBlendFunc")
 	register(&gl.readPixels, "glReadPixels")
+	register(&gl.getString, "glGetString")
 	return gl, nil
 }

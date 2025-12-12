@@ -30,6 +30,7 @@ type openGL struct {
 	loadIdentity  *syscall.LazyProc
 	blendFunc     *syscall.LazyProc
 	readPixels    *syscall.LazyProc
+	getString     *syscall.LazyProc
 }
 
 func (gl *openGL) ClearColor(r, g, b, a float32) {
@@ -116,6 +117,11 @@ func (gl *openGL) ReadPixels(x, y, width, height int32, format, xtype uint32, pi
 	gl.readPixels.Call(uintptr(x), uintptr(y), uintptr(width), uintptr(height), uintptr(format), uintptr(xtype), uintptr(pixels))
 }
 
+func (gl *openGL) GetString(name uint32) string {
+	ptr, _, _ := gl.getString.Call(uintptr(name))
+	return gostring((*byte)(unsafe.Pointer(ptr)))
+}
+
 func Load() (OpenGL, error) {
 	opengl32 := syscall.NewLazyDLL("opengl32.dll")
 	gl := &openGL{
@@ -140,6 +146,7 @@ func Load() (OpenGL, error) {
 		loadIdentity:  opengl32.NewProc("glLoadIdentity"),
 		blendFunc:     opengl32.NewProc("glBlendFunc"),
 		readPixels:    opengl32.NewProc("glReadPixels"),
+		getString:     opengl32.NewProc("glGetString"),
 	}
 	return gl, nil
 }
