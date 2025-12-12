@@ -47,6 +47,8 @@ func newWithProfile(title string, width, height int, useCoreProfile bool) (Windo
 	}
 
 	gl.Enable(glpkg.Texture2D)
+	gl.Enable(glpkg.Blend)
+	gl.BlendFunc(glpkg.SrcAlpha, glpkg.OneMinusSrcAlpha)
 
 	return &macWindow{
 		platform:     platform,

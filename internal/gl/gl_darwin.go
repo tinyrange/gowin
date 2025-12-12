@@ -24,6 +24,7 @@ type openGL struct {
 	ortho         func(float64, float64, float64, float64, float64, float64)
 	matrixMode    func(uint32)
 	loadIdentity  func()
+	blendFunc     func(uint32, uint32)
 }
 
 func (gl *openGL) ClearColor(r, g, b, a float32) {
@@ -86,6 +87,10 @@ func (gl *openGL) LoadIdentity() {
 	gl.loadIdentity()
 }
 
+func (gl *openGL) BlendFunc(sfactor, dfactor uint32) {
+	gl.blendFunc(sfactor, dfactor)
+}
+
 func Load() (OpenGL, error) {
 	handle, err := purego.Dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL", purego.RTLD_GLOBAL|purego.RTLD_LAZY)
 	if err != nil {
@@ -111,5 +116,6 @@ func Load() (OpenGL, error) {
 	register(&gl.ortho, "glOrtho")
 	register(&gl.matrixMode, "glMatrixMode")
 	register(&gl.loadIdentity, "glLoadIdentity")
+	register(&gl.blendFunc, "glBlendFunc")
 	return gl, nil
 }

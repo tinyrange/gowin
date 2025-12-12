@@ -14,6 +14,11 @@ const (
 	TriangleStrip    = 0x0005
 	Projection       = 0x1701
 	ModelView        = 0x1700
+
+	// Blending
+	Blend            = 0x0BE2
+	SrcAlpha         = 0x0302
+	OneMinusSrcAlpha = 0x0303
 )
 
 type OpenGL interface {
@@ -32,4 +37,5 @@ type OpenGL interface {
 	Ortho(float64, float64, float64, float64, float64, float64)
 	MatrixMode(uint32)
 	LoadIdentity()
+	BlendFunc(uint32, uint32)
 }
