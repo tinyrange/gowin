@@ -21,6 +21,7 @@ func Load(win graphics.Window) (*Renderer, error) {
 	}
 
 	stash := New(gl, 1024, 1024)
+	stash.SetYInverted(true)
 	fontIdx, err := stash.AddFontFromMemory(EMBEDDED_FONT)
 	if err != nil {
 		return nil, err

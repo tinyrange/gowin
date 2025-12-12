@@ -113,8 +113,10 @@ func New(gl glpkg.OpenGL, cachew, cacheh int) *Stash {
 	gl.BindTexture(glpkg.Texture2D, stash.ttTextures[0].id)
 	gl.TexImage2D(glpkg.Texture2D, 0, glpkg.Alpha, int32(cachew), int32(cacheh),
 		0, glpkg.Alpha, glpkg.UnsignedByte, unsafe.Pointer(&stash.emptyData[0]))
-	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMinFilter, glpkg.Linear)
-	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMagFilter, glpkg.Linear)
+	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMinFilter, glpkg.Nearest)
+	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMagFilter, glpkg.Nearest)
+	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureWrapS, glpkg.ClampToEdge)
+	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureWrapT, glpkg.ClampToEdge)
 	gl.Disable(glpkg.Texture2D)
 
 	return stash
@@ -237,8 +239,10 @@ func (s *Stash) GetGlyph(fnt *Font, codepoint int, isize int16) *Glyph {
 							int32(s.tw), int32(s.th), 0,
 							glpkg.Alpha, glpkg.UnsignedByte,
 							unsafe.Pointer(&s.emptyData[0]))
-						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMinFilter, glpkg.Linear)
-						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMagFilter, glpkg.Linear)
+						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMinFilter, glpkg.Nearest)
+						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMagFilter, glpkg.Nearest)
+						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureWrapS, glpkg.ClampToEdge)
+						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureWrapT, glpkg.ClampToEdge)
 						s.gl.Disable(glpkg.Texture2D)
 						s.ttTextures = append(s.ttTextures, texture)
 					}
@@ -308,12 +312,12 @@ func (s *Stash) GetQuad(fnt *Font, glyph *Glyph, isize int16, x, y float64) (flo
 	}
 
 	rx := math.Floor(x + scale*glyph.xoff)
-	ry := math.Floor(y + scale)
+	ry := math.Floor(y - scale*glyph.yoff)
 
 	q.x0 = float32(rx)
-	q.y0 = float32(float64(ry) - scale*float64(glyph.y1-glyph.y0))
+	q.y0 = float32(ry)
 	q.x1 = float32(float64(rx) + scale*float64(glyph.x1-glyph.x0))
-	q.y1 = float32(float64(ry))
+	q.y1 = float32(float64(ry) - scale*float64(glyph.y1-glyph.y0))
 
 	q.s0 = float32(float64(glyph.x0) * s.itw)
 	q.t0 = float32(float64(glyph.y0) * s.ith)

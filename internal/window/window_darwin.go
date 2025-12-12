@@ -169,7 +169,9 @@ func (c *Cocoa) BackingSize() (int, int) {
 
 // Cursor returns the mouse position in backing pixel coordinates.
 func (c *Cocoa) Cursor() (float32, float32) {
-	return c.cursorBackingPos()
+	_, h := c.BackingSize()
+	x, y := c.cursorBackingPos()
+	return x, float32(h) - y
 }
 
 // Close tears down the GL context and window.

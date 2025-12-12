@@ -8,10 +8,13 @@ const (
 	Texture2D        = 0x0DE1
 	UnpackAlignment  = 0x0CF5
 	Intensity        = 0x8049
+	TextureWrapS     = 0x2802
+	TextureWrapT     = 0x2803
 	TextureMinFilter = 0x2801
 	TextureMagFilter = 0x2800
 	Nearest          = 0x2600
 	Linear           = 0x2601
+	ClampToEdge      = 0x812F
 	Alpha            = 0x1906
 	RGBA             = 0x1908
 	UnsignedByte     = 0x1401
@@ -46,7 +49,7 @@ type OpenGL interface {
 	Color4fv(*float32)
 	TexCoord2f(float32, float32)
 	Vertex2f(float32, float32)
-	Ortho(float64, float64, float64, float64, float64, float64)
+	Ortho(x1 float64, x2 float64, y1 float64, y2 float64, near float64, far float64)
 	MatrixMode(uint32)
 	LoadIdentity()
 	BlendFunc(uint32, uint32)

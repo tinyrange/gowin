@@ -3,12 +3,9 @@
 package main
 
 import (
-	"fmt"
 	"image"
 	"image/color"
-	"image/png"
 	"log"
-	"os"
 
 	"github.com/tinyrange/gowin/internal/graphics"
 	"github.com/tinyrange/gowin/internal/text"
@@ -36,35 +33,31 @@ func main() {
 	const quadSize = 200.0
 
 	err = gfx.Loop(func(f graphics.Frame) error {
-		// _, h := f.WindowSize()
-		// mx, my := f.CursorPos()
-		// half := float32(quadSize / 2)
-		// x := mx - half
-		// y := float32(h) - my - half
+		x, y := f.CursorPos()
 
-		f.RenderQuad(300, 300, float32(quadSize), float32(quadSize), tex, [4]float32{1, 1, 1, 1})
+		f.RenderQuad(x, y, float32(quadSize), float32(quadSize), tex, [4]float32{1, 1, 1, 1})
 
-		font.RenderText("Hello, World", 10, 20, 32.0, [4]float32{1, 1, 0, 1})
+		font.RenderText("The quick brown fox jumps over the lazy dog.", 10, 24, 16, [4]float32{1, 1, 0, 1})
 
-		screenshot, err := f.Screenshot()
-		if err != nil {
-			log.Fatalf("screenshot: %v", err)
-		}
+		// screenshot, err := f.Screenshot()
+		// if err != nil {
+		// 	log.Fatalf("screenshot: %v", err)
+		// }
 
-		screenshotPath := "screenshot.png"
+		// screenshotPath := "screenshot.png"
 
-		file, err := os.Create(screenshotPath)
-		if err != nil {
-			return fmt.Errorf("create screenshot file: %v", err)
-		}
-		defer file.Close()
+		// file, err := os.Create(screenshotPath)
+		// if err != nil {
+		// 	return fmt.Errorf("create screenshot file: %v", err)
+		// }
+		// defer file.Close()
 
-		if err := png.Encode(file, screenshot); err != nil {
-			return fmt.Errorf("encode screenshot: %v", err)
-		}
+		// if err := png.Encode(file, screenshot); err != nil {
+		// 	return fmt.Errorf("encode screenshot: %v", err)
+		// }
 
-		return fmt.Errorf("taken screenshot at %s", screenshotPath)
-		// return nil
+		// return fmt.Errorf("taken screenshot at %s", screenshotPath)
+		return nil
 	})
 	if err != nil {
 		log.Fatalf("run loop: %v", err)
