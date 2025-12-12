@@ -30,6 +30,25 @@ type macFrame struct {
 	w *macWindow
 }
 
+// Screenshot implements Frame.
+func (f macFrame) Screenshot() (image.Image, error) {
+	bw, bh := f.w.platform.BackingSize()
+	rgba := image.NewRGBA(image.Rect(0, 0, bw, bh))
+	f.w.gl.ReadPixels(0, 0, int32(bw), int32(bh), glpkg.RGBA, glpkg.UnsignedByte, unsafe.Pointer(&rgba.Pix[0]))
+
+	// Flip the image vertically
+	flipped := image.NewRGBA(image.Rect(0, 0, bw, bh))
+	for y := 0; y < bh; y++ {
+		srcStart := y * rgba.Stride
+		srcEnd := srcStart + rgba.Stride
+		dstStart := (bh - 1 - y) * flipped.Stride
+		dstEnd := dstStart + flipped.Stride
+		copy(flipped.Pix[dstStart:dstEnd], rgba.Pix[srcStart:srcEnd])
+	}
+
+	return flipped, nil
+}
+
 // New returns a Window backed by the macOS Cocoa + OpenGL implementation.
 func New(title string, width, height int) (Window, error) {
 	return newWithProfile(title, width, height, false)
@@ -146,14 +165,16 @@ func (f macFrame) GetButtonState(window.Button) ButtonState {
 	return ButtonStateUp
 }
 
-func (f macFrame) RenderQuad(x, y, width, height float32, tex Texture) {
+func (f macFrame) RenderQuad(x, y, width, height float32, tex Texture, color [4]float32) {
 	t, ok := tex.(*macTexture)
 	if !ok {
 		return
 	}
 
+	f.w.gl.Enable(glpkg.Texture2D)
 	f.w.gl.BindTexture(glpkg.Texture2D, t.id)
 	f.w.gl.Begin(glpkg.TriangleStrip)
+	f.w.gl.Color4fv(&color[0])
 	f.w.gl.TexCoord2f(0, 0)
 	f.w.gl.Vertex2f(x, y)
 	f.w.gl.TexCoord2f(1, 0)

@@ -49,7 +49,9 @@ type Frame interface {
 	GetKeyState(key window.Key) KeyState
 	GetButtonState(button window.Button) ButtonState
 
-	RenderQuad(x, y, width, height float32, tex Texture)
+	RenderQuad(x, y, width, height float32, tex Texture, color [4]float32)
+
+	Screenshot() (image.Image, error)
 }
 
 type Texture interface {
