@@ -474,7 +474,7 @@ func (stash *Stash) DrawText(idx int, size, x, y float64, s string, color [4]flo
 	b := []byte(s)
 	for len(b) > 0 {
 		r, runeSize := utf8.DecodeRune(b)
-		
+
 		// Handle newline character
 		if r == '\n' {
 			x = startX
@@ -486,7 +486,7 @@ func (stash *Stash) DrawText(idx int, size, x, y float64, s string, color [4]flo
 			b = b[runeSize:]
 			continue
 		}
-		
+
 		glyph := stash.GetGlyph(fnt, int(r), isize)
 		if glyph == nil {
 			b = b[runeSize:]
