@@ -38,19 +38,38 @@ const (
 	Alpha = 0x1906
 	// RGBA is a pixel format representing red/green/blue/alpha.
 	RGBA = 0x1908
+	// Red is a pixel format representing red only (OpenGL 3.0+).
+	Red = 0x1903
+	// R8 is an internal texture format for 8-bit red channel (OpenGL 3.0+).
+	R8 = 0x8229
 
 	// UnsignedByte is a pixel data type indicating 8-bit unsigned values.
 	UnsignedByte = 0x1401
+	// Float is a data type indicating 32-bit floating point values.
+	Float = 0x1406
 
-	// Quads is a legacy primitive type for drawing quadrilaterals.
-	Quads = 0x0007
+	// Triangles is a primitive type for drawing triangles.
+	Triangles = 0x0004
 	// TriangleStrip is a primitive type for drawing a connected strip of triangles.
 	TriangleStrip = 0x0005
 
-	// Projection selects the projection matrix stack for MatrixMode.
-	Projection = 0x1701
-	// ModelView selects the model-view matrix stack for MatrixMode.
-	ModelView = 0x1700
+	// ArrayBuffer is the target for vertex buffer objects.
+	ArrayBuffer = 0x8892
+	// StaticDraw indicates that buffer data will be modified once and used many times.
+	StaticDraw = 0x88E4
+	// DynamicDraw indicates that buffer data will be modified repeatedly and used many times.
+	DynamicDraw = 0x88E8
+
+	// Shader types
+	VertexShader   = 0x8B31
+	FragmentShader = 0x8B30
+
+	// Shader/Program status
+	CompileStatus = 0x8B81
+	LinkStatus    = 0x8B82
+
+	// Texture unit
+	Texture0 = 0x84C0
 
 	// Blending capabilities and factors.
 	Blend            = 0x0BE2
@@ -129,35 +148,53 @@ type OpenGL interface {
 	// PixelStorei sets pixel storage modes (e.g., UnpackAlignment).
 	PixelStorei(pname uint32, param int32)
 
-	// Begin begins specifying vertices for a primitive or a group of like primitives.
-	//
-	// This is part of OpenGL's legacy immediate mode API.
-	Begin(mode uint32)
-
-	// End marks the end of vertex specification started by Begin.
-	End()
-
-	// Color4fv sets the current color using a pointer to four float32 values.
-	Color4fv(v *float32)
-
-	// TexCoord2f sets the current texture coordinates.
-	TexCoord2f(s, t float32)
-
-	// Vertex2f specifies a vertex.
-	Vertex2f(x, y float32)
-
-	// Ortho multiplies the current matrix by an orthographic projection matrix.
-	Ortho(x1, x2, y1, y2, near, far float64)
-
-	// MatrixMode sets which matrix stack is the target for subsequent matrix operations
-	// (e.g., Projection or ModelView).
-	MatrixMode(mode uint32)
-
-	// LoadIdentity replaces the current matrix with the identity matrix.
-	LoadIdentity()
+	// ActiveTexture selects the active texture unit.
+	ActiveTexture(texture uint32)
 
 	// BlendFunc specifies the pixel arithmetic for blending (e.g., SrcAlpha and OneMinusSrcAlpha).
 	BlendFunc(sfactor, dfactor uint32)
+
+	// Buffer operations
+	GenBuffers(n int32, buffers *uint32)
+	DeleteBuffers(n int32, buffers *uint32)
+	BindBuffer(target uint32, buffer uint32)
+	BufferData(target uint32, size int, data unsafe.Pointer, usage uint32)
+	BufferSubData(target uint32, offset int, size int, data unsafe.Pointer)
+
+	// Vertex Array Object operations
+	GenVertexArrays(n int32, arrays *uint32)
+	DeleteVertexArrays(n int32, arrays *uint32)
+	BindVertexArray(array uint32)
+	VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset unsafe.Pointer)
+	EnableVertexAttribArray(index uint32)
+
+	// Shader operations
+	CreateShader(xtype uint32) uint32
+	ShaderSource(shader uint32, source string)
+	CompileShader(shader uint32)
+	GetShaderiv(shader uint32, pname uint32, params *int32)
+	GetShaderInfoLog(shader uint32) string
+	DeleteShader(shader uint32)
+
+	// Program operations
+	CreateProgram() uint32
+	AttachShader(program uint32, shader uint32)
+	LinkProgram(program uint32)
+	GetProgramiv(program uint32, pname uint32, params *int32)
+	GetProgramInfoLog(program uint32) string
+	UseProgram(program uint32)
+	DeleteProgram(program uint32)
+
+	// Uniform operations
+	GetUniformLocation(program uint32, name string) int32
+	// GetAttribLocation returns the location of an attribute variable.
+	GetAttribLocation(program uint32, name string) int32
+	Uniform1i(location int32, v0 int32)
+	Uniform4f(location int32, v0, v1, v2, v3 float32)
+	UniformMatrix4fv(location int32, count int32, transpose bool, value *float32)
+
+	// Drawing
+	DrawArrays(mode uint32, first int32, count int32)
 
 	// ReadPixels reads a block of pixels from the framebuffer into client memory.
 	ReadPixels(

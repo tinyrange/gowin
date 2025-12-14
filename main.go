@@ -49,6 +49,10 @@ func main() {
 
 		f.RenderQuad(x, y, float32(quadSize), float32(quadSize), tex, graphics.ColorWhite)
 
+		// Set viewport for text rendering
+		w, h := f.WindowSize()
+		font.SetViewport(int32(w), int32(h))
+
 		text := fmt.Sprintf("The quick brown fox jumps over the lazy dog.\nScale = %f", gfx.Scale())
 
 		font.RenderText(text, 10, 24, 16, graphics.ColorYellow)

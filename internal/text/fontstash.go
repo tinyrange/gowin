@@ -1,6 +1,7 @@
 package text
 
 import (
+	"fmt"
 	"io/ioutil"
 	"math"
 	"unicode/utf8"
@@ -8,6 +9,38 @@ import (
 
 	glpkg "github.com/tinyrange/gowin/internal/gl"
 	"github.com/tinyrange/gowin/internal/third_party/truetype"
+)
+
+const (
+	textVertexShaderSource = `#version 130
+in vec2 a_position;
+in vec2 a_texCoord;
+in vec4 a_color;
+
+out vec2 v_texCoord;
+out vec4 v_color;
+
+uniform mat4 u_proj;
+
+void main() {
+	gl_Position = u_proj * vec4(a_position, 0.0, 1.0);
+	v_texCoord = a_texCoord;
+	v_color = a_color;
+}`
+
+	textFragmentShaderSource = `#version 130
+in vec2 v_texCoord;
+in vec4 v_color;
+
+out vec4 fragColor;
+
+uniform sampler2D u_texture;
+
+void main() {
+	// Sample red channel as alpha (GL_R8 texture)
+	float alpha = texture(u_texture, v_texCoord).r;
+	fragColor = vec4(v_color.rgb, v_color.a * alpha);
+}`
 )
 
 const (
@@ -38,6 +71,16 @@ type Stash struct {
 	fonts      []*Font
 	drawing    bool
 	yInverted  bool
+
+	// GL3 resources
+	shaderProgram  uint32
+	vao            uint32
+	vbo            uint32
+	projUniform    int32
+	viewportW      int32
+	viewportH      int32
+	scale          float32
+	graphicsShader uint32
 }
 
 type Font struct {
@@ -106,20 +149,107 @@ func New(gl glpkg.OpenGL, cachew, cacheh int) *Stash {
 	stash.th = cacheh
 	stash.itw = 1 / float64(cachew)
 	stash.ith = 1 / float64(cacheh)
-	gl.Enable(glpkg.Texture2D)
 	stash.ttTextures = make([]*Texture, 1)
 	stash.ttTextures[0] = &Texture{}
 	gl.GenTextures(1, &stash.ttTextures[0].id)
 	gl.BindTexture(glpkg.Texture2D, stash.ttTextures[0].id)
-	gl.TexImage2D(glpkg.Texture2D, 0, glpkg.Alpha, int32(cachew), int32(cacheh),
-		0, glpkg.Alpha, glpkg.UnsignedByte, unsafe.Pointer(&stash.emptyData[0]))
+	// Use GL_R8 for single-channel alpha texture (OpenGL 3.0+)
+	gl.TexImage2D(glpkg.Texture2D, 0, int32(glpkg.R8), int32(cachew), int32(cacheh),
+		0, glpkg.Red, glpkg.UnsignedByte, unsafe.Pointer(&stash.emptyData[0]))
 	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMinFilter, glpkg.Nearest)
 	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMagFilter, glpkg.Nearest)
 	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureWrapS, glpkg.ClampToEdge)
 	gl.TexParameteri(glpkg.Texture2D, glpkg.TextureWrapT, glpkg.ClampToEdge)
-	gl.Disable(glpkg.Texture2D)
+
+	// Create shader program
+	program, err := createTextShaderProgram(gl, textVertexShaderSource, textFragmentShaderSource)
+	if err != nil {
+		// Return stash but shader will be nil - caller should handle error
+		return stash
+	}
+	stash.shaderProgram = program
+	stash.projUniform = gl.GetUniformLocation(program, "u_proj")
+
+	// Create VAO and VBO
+	var vao, vbo uint32
+	gl.GenVertexArrays(1, &vao)
+	gl.GenBuffers(1, &vbo)
+	stash.vao = vao
+	stash.vbo = vbo
+
+	gl.BindVertexArray(vao)
+	gl.BindBuffer(glpkg.ArrayBuffer, vbo)
+	// Allocate buffer for VERT_COUNT vertices * 8 floats (2 pos + 2 tex + 4 color)
+	gl.BufferData(glpkg.ArrayBuffer, VERT_COUNT*8*4, nil, glpkg.DynamicDraw)
+
+	// Set up vertex attributes
+	posLoc := gl.GetAttribLocation(program, "a_position")
+	texLoc := gl.GetAttribLocation(program, "a_texCoord")
+	colLoc := gl.GetAttribLocation(program, "a_color")
+	gl.VertexAttribPointer(uint32(posLoc), 2, glpkg.Float, false, 8*4, unsafe.Pointer(uintptr(0)))
+	gl.EnableVertexAttribArray(uint32(posLoc))
+	gl.VertexAttribPointer(uint32(texLoc), 2, glpkg.Float, false, 8*4, unsafe.Pointer(uintptr(8)))
+	gl.EnableVertexAttribArray(uint32(texLoc))
+	gl.VertexAttribPointer(uint32(colLoc), 4, glpkg.Float, false, 8*4, unsafe.Pointer(uintptr(16)))
+	gl.EnableVertexAttribArray(uint32(colLoc))
 
 	return stash
+}
+
+func createTextShaderProgram(gl glpkg.OpenGL, vertexSrc, fragmentSrc string) (uint32, error) {
+	// Create and compile vertex shader
+	vertexShader := gl.CreateShader(glpkg.VertexShader)
+	gl.ShaderSource(vertexShader, vertexSrc)
+	gl.CompileShader(vertexShader)
+	var status int32
+	gl.GetShaderiv(vertexShader, glpkg.CompileStatus, &status)
+	if status == 0 {
+		log := gl.GetShaderInfoLog(vertexShader)
+		gl.DeleteShader(vertexShader)
+		return 0, fmt.Errorf("text vertex shader compilation failed: %s", log)
+	}
+
+	// Create and compile fragment shader
+	fragmentShader := gl.CreateShader(glpkg.FragmentShader)
+	gl.ShaderSource(fragmentShader, fragmentSrc)
+	gl.CompileShader(fragmentShader)
+	gl.GetShaderiv(fragmentShader, glpkg.CompileStatus, &status)
+	if status == 0 {
+		log := gl.GetShaderInfoLog(fragmentShader)
+		gl.DeleteShader(vertexShader)
+		gl.DeleteShader(fragmentShader)
+		return 0, fmt.Errorf("text fragment shader compilation failed: %s", log)
+	}
+
+	// Create program and link
+	program := gl.CreateProgram()
+	gl.AttachShader(program, vertexShader)
+	gl.AttachShader(program, fragmentShader)
+	gl.LinkProgram(program)
+	gl.GetProgramiv(program, glpkg.LinkStatus, &status)
+	if status == 0 {
+		log := gl.GetProgramInfoLog(program)
+		gl.DeleteShader(vertexShader)
+		gl.DeleteShader(fragmentShader)
+		gl.DeleteProgram(program)
+		return 0, fmt.Errorf("text program linking failed: %s", log)
+	}
+
+	gl.DeleteShader(vertexShader)
+	gl.DeleteShader(fragmentShader)
+
+	return program, nil
+}
+
+// orthoMatrix creates an orthographic projection matrix (column-major)
+func orthoMatrix(left, right, bottom, top, near, far float32) [16]float32 {
+	// Column-major order
+	return [16]float32{
+		2.0 / (right - left), 0, 0, 0,
+		0, 2.0 / (top - bottom), 0, 0,
+		0, 0, -2.0 / (far - near), 0,
+		-(right + left) / (right - left), -(top + bottom) / (top - bottom), -(far + near) / (far - near), 1,
+	}
 }
 
 func (s *Stash) AddFontFromMemory(buffer []byte) (int, error) {
@@ -231,19 +361,17 @@ func (s *Stash) GetGlyph(fnt *Font, codepoint int, isize int16) *Glyph {
 						texture = s.ttTextures[tt]
 					} else {
 						// Create new texture
-						s.gl.Enable(glpkg.Texture2D)
 						texture = &Texture{}
 						s.gl.GenTextures(1, &texture.id)
 						s.gl.BindTexture(glpkg.Texture2D, texture.id)
-						s.gl.TexImage2D(glpkg.Texture2D, 0, glpkg.Alpha,
+						s.gl.TexImage2D(glpkg.Texture2D, 0, int32(glpkg.R8),
 							int32(s.tw), int32(s.th), 0,
-							glpkg.Alpha, glpkg.UnsignedByte,
+							glpkg.Red, glpkg.UnsignedByte,
 							unsafe.Pointer(&s.emptyData[0]))
 						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMinFilter, glpkg.Nearest)
 						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureMagFilter, glpkg.Nearest)
 						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureWrapS, glpkg.ClampToEdge)
 						s.gl.TexParameteri(glpkg.Texture2D, glpkg.TextureWrapT, glpkg.ClampToEdge)
-						s.gl.Disable(glpkg.Texture2D)
 						s.ttTextures = append(s.ttTextures, texture)
 					}
 					continue
@@ -286,14 +414,12 @@ func (s *Stash) GetGlyph(fnt *Font, codepoint int, isize int16) *Glyph {
 	bmp := make([]byte, gw*gh)
 	bmp = fnt.font.MakeGlyphBitmap(bmp, gw, gh, gw, scale, scale, g)
 	if len(bmp) > 0 {
-		s.gl.Enable(glpkg.Texture2D)
 		// Update texture
 		s.gl.BindTexture(glpkg.Texture2D, texture.id)
 		s.gl.PixelStorei(glpkg.UnpackAlignment, 1)
 		s.gl.TexSubImage2D(glpkg.Texture2D, 0, int32(glyph.x0), int32(glyph.y0),
-			int32(gw), int32(gh), glpkg.Alpha, glpkg.UnsignedByte,
+			int32(gw), int32(gh), glpkg.Red, glpkg.UnsignedByte,
 			unsafe.Pointer(&bmp[0]))
-		s.gl.Disable(glpkg.Texture2D)
 	}
 
 	return glyph
@@ -301,6 +427,19 @@ func (s *Stash) GetGlyph(fnt *Font, codepoint int, isize int16) *Glyph {
 
 func (s *Stash) SetYInverted(inverted bool) {
 	s.yInverted = inverted
+}
+
+func (s *Stash) SetViewport(width, height int32) {
+	s.viewportW = width
+	s.viewportH = height
+}
+
+func (s *Stash) SetScale(scale float32) {
+	s.scale = scale
+}
+
+func (s *Stash) SetGraphicsShader(shader uint32) {
+	s.graphicsShader = shader
 }
 
 func (s *Stash) GetQuad(fnt *Font, glyph *Glyph, isize int16, x, y float64) (float64, float64, *Quad) {
@@ -336,33 +475,81 @@ func (s *Stash) GetQuad(fnt *Font, glyph *Glyph, isize int16, x, y float64) (flo
 }
 
 func (s *Stash) FlushDraw() {
+	if s.shaderProgram == 0 {
+		return // Shader not initialized
+	}
+
+	// Compute orthographic projection matrix
+	// Use viewport size if set, otherwise use a default
+	// The viewport size should already be scaled (divided by scale factor)
+	width := float32(s.viewportW)
+	height := float32(s.viewportH)
+	if width == 0 {
+		width = 800 // default
+	}
+	if height == 0 {
+		height = 600 // default
+	}
+	proj := orthoMatrix(0, width, height, 0, -1, 1)
+
+	// Save current shader program to restore later
+	// Note: We can't easily query the current program in GL3, so we'll rely on
+	// the graphics system to reset it in prepareFrame() each frame
+	s.gl.UseProgram(s.shaderProgram)
+	s.gl.UniformMatrix4fv(s.projUniform, 1, false, &proj[0])
+	s.gl.BindVertexArray(s.vao)
+
 	i := 0
 	texture := s.ttTextures[i]
 	tt := true
 	for {
 		if texture.nverts > 0 {
-			s.gl.Enable(glpkg.Texture2D)
+			s.gl.ActiveTexture(glpkg.Texture0)
 			s.gl.BindTexture(glpkg.Texture2D, texture.id)
-			for k := 0; k < texture.nverts; k++ {
-				s.gl.Begin(glpkg.Quads)
-				s.gl.Color4fv(&texture.color[0])
-				s.gl.TexCoord2f(texture.verts[k*4+2], texture.verts[k*4+3])
-				s.gl.Vertex2f(texture.verts[k*4+0], texture.verts[k*4+1])
-				k++
-				s.gl.Color4fv(&texture.color[0])
-				s.gl.TexCoord2f(texture.verts[k*4+2], texture.verts[k*4+3])
-				s.gl.Vertex2f(texture.verts[k*4+0], texture.verts[k*4+1])
-				k++
-				s.gl.Color4fv(&texture.color[0])
-				s.gl.TexCoord2f(texture.verts[k*4+2], texture.verts[k*4+3])
-				s.gl.Vertex2f(texture.verts[k*4+0], texture.verts[k*4+1])
-				k++
-				s.gl.Color4fv(&texture.color[0])
-				s.gl.TexCoord2f(texture.verts[k*4+2], texture.verts[k*4+3])
-				s.gl.Vertex2f(texture.verts[k*4+0], texture.verts[k*4+1])
-				s.gl.End()
+			texUniform := s.gl.GetUniformLocation(s.shaderProgram, "u_texture")
+			s.gl.Uniform1i(texUniform, 0)
+
+			// texture.nverts is a *vertex count* (4 verts per quad), not a quad count.
+			numQuads := texture.nverts / 4
+			vertexCount := numQuads * 6                // 6 vertices per quad (2 triangles)
+			vertices := make([]float32, vertexCount*8) // 8 floats per vertex
+
+			vidx := 0
+			for q := 0; q < numQuads; q++ {
+				base := q * 4
+				// corners in order: 0,1,2,3
+				v0 := base + 0
+				v1 := base + 1
+				v2 := base + 2
+				v3 := base + 3
+
+				emit := func(v int) {
+					vertices[vidx+0] = texture.verts[v*4+0] // x
+					vertices[vidx+1] = texture.verts[v*4+1] // y
+					vertices[vidx+2] = texture.verts[v*4+2] // s
+					vertices[vidx+3] = texture.verts[v*4+3] // t
+					vertices[vidx+4] = texture.color[0]
+					vertices[vidx+5] = texture.color[1]
+					vertices[vidx+6] = texture.color[2]
+					vertices[vidx+7] = texture.color[3]
+					vidx += 8
+				}
+
+				// Vertex order in texture.verts is:
+				// 0: (x0,y0) 1:(x1,y0) 2:(x1,y1) 3:(x0,y1)
+				// So triangles should be (0,1,2) and (0,2,3).
+				emit(v0)
+				emit(v1)
+				emit(v2)
+				emit(v0)
+				emit(v2)
+				emit(v3)
 			}
-			s.gl.Disable(glpkg.Texture2D)
+
+			s.gl.BindBuffer(glpkg.ArrayBuffer, s.vbo)
+			s.gl.BufferSubData(glpkg.ArrayBuffer, 0, len(vertices)*4, unsafe.Pointer(&vertices[0]))
+
+			s.gl.DrawArrays(glpkg.Triangles, 0, int32(vertexCount))
 			texture.nverts = 0
 		}
 		if tt {
@@ -386,6 +573,11 @@ func (s *Stash) FlushDraw() {
 				break
 			}
 		}
+	}
+
+	// Restore graphics shader program after all text rendering is complete
+	if s.graphicsShader != 0 {
+		s.gl.UseProgram(s.graphicsShader)
 	}
 }
 

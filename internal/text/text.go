@@ -10,8 +10,10 @@ import (
 var EMBEDDED_FONT []byte
 
 type Renderer struct {
-	stash *Stash
-	font  int
+	stash          *Stash
+	font           int
+	scale          float32
+	graphicsShader uint32
 }
 
 func Load(win graphics.Window) (*Renderer, error) {
@@ -28,8 +30,10 @@ func Load(win graphics.Window) (*Renderer, error) {
 	}
 
 	return &Renderer{
-		stash: stash,
-		font:  fontIdx,
+		stash:          stash,
+		font:           fontIdx,
+		scale:          win.Scale(),
+		graphicsShader: win.GetShaderProgram(),
 	}, nil
 }
 
@@ -42,4 +46,15 @@ func (r *Renderer) RenderText(s string, x, y float32, size float64, color graphi
 	next := r.stash.DrawText(r.font, size, float64(x), float64(y), s, [4]float32(color))
 	r.stash.EndDraw()
 	return float32(next)
+}
+
+func (r *Renderer) SetViewport(width, height int32) {
+	if r != nil && r.stash != nil {
+		// Apply scale factor to match the graphics system's coordinate system
+		scaledWidth := float32(width) / r.scale
+		scaledHeight := float32(height) / r.scale
+		r.stash.SetViewport(int32(scaledWidth), int32(scaledHeight))
+		r.stash.SetScale(r.scale)
+		r.stash.SetGraphicsShader(r.graphicsShader)
+	}
 }

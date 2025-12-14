@@ -20,17 +20,51 @@ type openGL struct {
 	texSubImage2D func(uint32, int32, int32, int32, int32, int32, uint32, uint32, unsafe.Pointer)
 	texParameteri func(uint32, uint32, int32)
 	pixelStorei   func(uint32, int32)
-	begin         func(uint32)
-	end           func()
-	color4fv      func(*float32)
-	texCoord2f    func(float32, float32)
-	vertex2f      func(float32, float32)
-	ortho         func(float64, float64, float64, float64, float64, float64)
-	matrixMode    func(uint32)
-	loadIdentity  func()
+	activeTexture func(uint32)
 	blendFunc     func(uint32, uint32)
 	readPixels    func(int32, int32, int32, int32, uint32, uint32, unsafe.Pointer)
 	getString     func(uint32) *byte
+
+	// Buffer operations
+	genBuffers    func(int32, *uint32)
+	deleteBuffers func(int32, *uint32)
+	bindBuffer    func(uint32, uint32)
+	bufferData    func(uint32, int, unsafe.Pointer, uint32)
+	bufferSubData func(uint32, int, int, unsafe.Pointer)
+
+	// VAO operations
+	genVertexArrays         func(int32, *uint32)
+	deleteVertexArrays      func(int32, *uint32)
+	bindVertexArray         func(uint32)
+	vertexAttribPointer     func(uint32, int32, uint32, bool, int32, unsafe.Pointer)
+	enableVertexAttribArray func(uint32)
+
+	// Shader operations
+	createShader     func(uint32) uint32
+	shaderSource     func(uint32, int32, **byte, *int32)
+	compileShader    func(uint32)
+	getShaderiv      func(uint32, uint32, *int32)
+	getShaderInfoLog func(uint32, int32, *int32, *byte)
+	deleteShader     func(uint32)
+
+	// Program operations
+	createProgram     func() uint32
+	attachShader      func(uint32, uint32)
+	linkProgram       func(uint32)
+	getProgramiv      func(uint32, uint32, *int32)
+	getProgramInfoLog func(uint32, int32, *int32, *byte)
+	useProgram        func(uint32)
+	deleteProgram     func(uint32)
+
+	// Uniform operations
+	getUniformLocation func(uint32, *byte) int32
+	getAttribLocation  func(uint32, *byte) int32
+	uniform1i          func(int32, int32)
+	uniform4f          func(int32, float32, float32, float32, float32)
+	uniformMatrix4fv   func(int32, int32, bool, *float32)
+
+	// Drawing
+	drawArrays func(uint32, int32, int32)
 }
 
 func (gl *openGL) ClearColor(r, g, b, a float32) {
@@ -77,36 +111,8 @@ func (gl *openGL) PixelStorei(pname uint32, param int32) {
 	gl.pixelStorei(pname, param)
 }
 
-func (gl *openGL) Begin(mode uint32) {
-	gl.begin(mode)
-}
-
-func (gl *openGL) End() {
-	gl.end()
-}
-
-func (gl *openGL) Color4fv(v *float32) {
-	gl.color4fv(v)
-}
-
-func (gl *openGL) TexCoord2f(s, t float32) {
-	gl.texCoord2f(s, t)
-}
-
-func (gl *openGL) Vertex2f(x, y float32) {
-	gl.vertex2f(x, y)
-}
-
-func (gl *openGL) Ortho(left, right, bottom, top, zNear, zFar float64) {
-	gl.ortho(left, right, bottom, top, zNear, zFar)
-}
-
-func (gl *openGL) MatrixMode(mode uint32) {
-	gl.matrixMode(mode)
-}
-
-func (gl *openGL) LoadIdentity() {
-	gl.loadIdentity()
+func (gl *openGL) ActiveTexture(texture uint32) {
+	gl.activeTexture(texture)
 }
 
 func (gl *openGL) BlendFunc(sfactor, dfactor uint32) {
@@ -122,6 +128,143 @@ func (gl *openGL) ReadPixels(x, y, width, height int32, format, xtype uint32, pi
 func (gl *openGL) GetString(name uint32) string {
 	ptr := gl.getString(name)
 	return gostring((*byte)(unsafe.Pointer(ptr)))
+}
+
+func (gl *openGL) GenBuffers(n int32, buffers *uint32) {
+	gl.genBuffers(n, buffers)
+}
+
+func (gl *openGL) DeleteBuffers(n int32, buffers *uint32) {
+	gl.deleteBuffers(n, buffers)
+}
+
+func (gl *openGL) BindBuffer(target uint32, buffer uint32) {
+	gl.bindBuffer(target, buffer)
+}
+
+func (gl *openGL) BufferData(target uint32, size int, data unsafe.Pointer, usage uint32) {
+	gl.bufferData(target, size, data, usage)
+}
+
+func (gl *openGL) BufferSubData(target uint32, offset int, size int, data unsafe.Pointer) {
+	gl.bufferSubData(target, offset, size, data)
+}
+
+func (gl *openGL) GenVertexArrays(n int32, arrays *uint32) {
+	gl.genVertexArrays(n, arrays)
+}
+
+func (gl *openGL) DeleteVertexArrays(n int32, arrays *uint32) {
+	gl.deleteVertexArrays(n, arrays)
+}
+
+func (gl *openGL) BindVertexArray(array uint32) {
+	gl.bindVertexArray(array)
+}
+
+func (gl *openGL) VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset unsafe.Pointer) {
+	gl.vertexAttribPointer(index, size, xtype, normalized, stride, offset)
+}
+
+func (gl *openGL) EnableVertexAttribArray(index uint32) {
+	gl.enableVertexAttribArray(index)
+}
+
+func (gl *openGL) CreateShader(xtype uint32) uint32 {
+	return gl.createShader(xtype)
+}
+
+func (gl *openGL) ShaderSource(shader uint32, source string) {
+	srcBytes := []byte(source)
+	srcPtr := &srcBytes[0]
+	length := int32(len(source))
+	gl.shaderSource(shader, 1, &srcPtr, &length)
+}
+
+func (gl *openGL) CompileShader(shader uint32) {
+	gl.compileShader(shader)
+}
+
+func (gl *openGL) GetShaderiv(shader uint32, pname uint32, params *int32) {
+	gl.getShaderiv(shader, pname, params)
+}
+
+func (gl *openGL) GetShaderInfoLog(shader uint32) string {
+	var length int32
+	gl.getShaderiv(shader, 0x8B84, &length) // INFO_LOG_LENGTH
+	if length == 0 {
+		return ""
+	}
+	log := make([]byte, length)
+	gl.getShaderInfoLog(shader, length, &length, &log[0])
+	return string(log[:length])
+}
+
+func (gl *openGL) DeleteShader(shader uint32) {
+	gl.deleteShader(shader)
+}
+
+func (gl *openGL) CreateProgram() uint32 {
+	return gl.createProgram()
+}
+
+func (gl *openGL) AttachShader(program uint32, shader uint32) {
+	gl.attachShader(program, shader)
+}
+
+func (gl *openGL) LinkProgram(program uint32) {
+	gl.linkProgram(program)
+}
+
+func (gl *openGL) GetProgramiv(program uint32, pname uint32, params *int32) {
+	gl.getProgramiv(program, pname, params)
+}
+
+func (gl *openGL) GetProgramInfoLog(program uint32) string {
+	var length int32
+	gl.getProgramiv(program, 0x8B84, &length) // INFO_LOG_LENGTH
+	if length == 0 {
+		return ""
+	}
+	log := make([]byte, length)
+	gl.getProgramInfoLog(program, length, &length, &log[0])
+	return string(log[:length])
+}
+
+func (gl *openGL) UseProgram(program uint32) {
+	gl.useProgram(program)
+}
+
+func (gl *openGL) DeleteProgram(program uint32) {
+	gl.deleteProgram(program)
+}
+
+func (gl *openGL) GetUniformLocation(program uint32, name string) int32 {
+	nameBytes := []byte(name)
+	nameBytes = append(nameBytes, 0)
+	return gl.getUniformLocation(program, &nameBytes[0])
+}
+
+func (gl *openGL) GetAttribLocation(program uint32, name string) int32 {
+	nameBytes := []byte(name)
+	nameBytes = append(nameBytes, 0)
+	return gl.getAttribLocation(program, &nameBytes[0])
+}
+
+func (gl *openGL) Uniform1i(location int32, v0 int32) {
+	gl.uniform1i(location, v0)
+}
+
+func (gl *openGL) Uniform4f(location int32, v0, v1, v2, v3 float32) {
+	gl.uniform4f(location, v0, v1, v2, v3)
+}
+
+func (gl *openGL) UniformMatrix4fv(location int32, count int32, transpose bool, value *float32) {
+	gl.uniformMatrix4fv(location, count, transpose, value)
+}
+
+func (gl *openGL) DrawArrays(mode uint32, first int32, count int32) {
+	gl.drawArrays(mode, first, count)
 }
 
 func Load() (OpenGL, error) {
@@ -145,16 +288,41 @@ func Load() (OpenGL, error) {
 	register(&gl.texSubImage2D, "glTexSubImage2D")
 	register(&gl.texParameteri, "glTexParameteri")
 	register(&gl.pixelStorei, "glPixelStorei")
-	register(&gl.begin, "glBegin")
-	register(&gl.end, "glEnd")
-	register(&gl.color4fv, "glColor4fv")
-	register(&gl.texCoord2f, "glTexCoord2f")
-	register(&gl.vertex2f, "glVertex2f")
-	register(&gl.ortho, "glOrtho")
-	register(&gl.matrixMode, "glMatrixMode")
-	register(&gl.loadIdentity, "glLoadIdentity")
+	register(&gl.activeTexture, "glActiveTexture")
 	register(&gl.blendFunc, "glBlendFunc")
 	register(&gl.readPixels, "glReadPixels")
 	register(&gl.getString, "glGetString")
+
+	// GL3 functions
+	register(&gl.genBuffers, "glGenBuffers")
+	register(&gl.deleteBuffers, "glDeleteBuffers")
+	register(&gl.bindBuffer, "glBindBuffer")
+	register(&gl.bufferData, "glBufferData")
+	register(&gl.bufferSubData, "glBufferSubData")
+	register(&gl.genVertexArrays, "glGenVertexArrays")
+	register(&gl.deleteVertexArrays, "glDeleteVertexArrays")
+	register(&gl.bindVertexArray, "glBindVertexArray")
+	register(&gl.vertexAttribPointer, "glVertexAttribPointer")
+	register(&gl.enableVertexAttribArray, "glEnableVertexAttribArray")
+	register(&gl.createShader, "glCreateShader")
+	register(&gl.shaderSource, "glShaderSource")
+	register(&gl.compileShader, "glCompileShader")
+	register(&gl.getShaderiv, "glGetShaderiv")
+	register(&gl.getShaderInfoLog, "glGetShaderInfoLog")
+	register(&gl.deleteShader, "glDeleteShader")
+	register(&gl.createProgram, "glCreateProgram")
+	register(&gl.attachShader, "glAttachShader")
+	register(&gl.linkProgram, "glLinkProgram")
+	register(&gl.getProgramiv, "glGetProgramiv")
+	register(&gl.getProgramInfoLog, "glGetProgramInfoLog")
+	register(&gl.useProgram, "glUseProgram")
+	register(&gl.deleteProgram, "glDeleteProgram")
+	register(&gl.getUniformLocation, "glGetUniformLocation")
+	register(&gl.getAttribLocation, "glGetAttribLocation")
+	register(&gl.uniform1i, "glUniform1i")
+	register(&gl.uniform4f, "glUniform4f")
+	register(&gl.uniformMatrix4fv, "glUniformMatrix4fv")
+	register(&gl.drawArrays, "glDrawArrays")
+
 	return gl, nil
 }

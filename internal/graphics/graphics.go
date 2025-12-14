@@ -91,6 +91,9 @@ type Window interface {
 
 	// Call f for each frame until it returns an error.
 	Loop(func(f Frame) error) error
+
+	// GetShaderProgram returns the graphics shader program ID for state restoration.
+	GetShaderProgram() uint32
 }
 
 // Each platform implements a New() method to return a Window.

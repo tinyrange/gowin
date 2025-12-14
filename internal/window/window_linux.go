@@ -19,6 +19,12 @@ const (
 	glxDepthSize    = 12
 	glxNone         = 0
 
+	// GLX_ARB_create_context constants
+	glxContextMajorVersionArb   = 0x2091
+	glxContextMinorVersionArb   = 0x2092
+	glxContextFlagsArb          = 0x2094
+	glxContextCoreProfileBitArb = 0x00000001
+
 	inputOutput = 1
 
 	exposureMask        = 1 << 15
@@ -85,11 +91,15 @@ var (
 	xDisplayHeightMM       func(uintptr, int32) int32
 	xResourceManagerString func(uintptr) *byte
 
-	glxChooseVisual   func(uintptr, int32, *int32) *XVisualInfo
-	glxCreateContext  func(uintptr, *XVisualInfo, uintptr, int32) uintptr
-	glxMakeCurrent    func(uintptr, uintptr, uintptr) int32
-	glxSwapBuffers    func(uintptr, uintptr)
-	glxDestroyContext func(uintptr, uintptr)
+	glxChooseVisual            func(uintptr, int32, *int32) *XVisualInfo
+	glxCreateContext           func(uintptr, *XVisualInfo, uintptr, int32) uintptr
+	glxMakeCurrent             func(uintptr, uintptr, uintptr) int32
+	glxSwapBuffers             func(uintptr, uintptr)
+	glxDestroyContext          func(uintptr, uintptr)
+	glxChooseFBConfig          func(uintptr, int32, *int32, *int32) uintptr
+	glxGetVisualFromFBConfig   func(uintptr, uintptr) *XVisualInfo
+	glxCreateContextAttribsARB func(uintptr, uintptr, uintptr, int32, *int32) uintptr
+	glXGetProcAddressARB       func(*byte) unsafe.Pointer
 )
 
 type x11Window struct {
@@ -117,12 +127,76 @@ func New(title string, width, height int, _ bool) (Window, error) {
 	screen := xDefaultScreen(dpy)
 	root := xRootWindow(dpy, screen)
 
-	attrs := []int32{glxRGBA, glxDoubleBuffer, glxDepthSize, 24, glxNone}
-	visual := glxChooseVisual(dpy, screen, &attrs[0])
+	// Try to use GLX_ARB_create_context for OpenGL 3.0+
+	var visual *XVisualInfo
+	var fbConfig uintptr
+	var ctx uintptr
+
+	// First, try FBConfig-based approach for GL 3.0+
+	if glxChooseFBConfig != nil {
+		fbAttribs := []int32{
+			0x8011, // GLX_X_RENDERABLE
+			1,      // True
+			0x8012, // GLX_DRAWABLE_TYPE
+			0x8001, // GLX_WINDOW_BIT
+			0x8013, // GLX_RENDER_TYPE
+			0x8011, // GLX_RGBA_BIT
+			0x8014, // GLX_X_VISUAL_TYPE
+			0x8012, // GLX_TRUE_COLOR
+			0x8002, // GLX_DOUBLEBUFFER
+			1,      // True
+			0x8015, // GLX_RED_SIZE
+			8,
+			0x8016, // GLX_GREEN_SIZE
+			8,
+			0x8017, // GLX_BLUE_SIZE
+			8,
+			0x8018, // GLX_ALPHA_SIZE
+			8,
+			0x8019, // GLX_DEPTH_SIZE
+			24,
+			glxNone,
+		}
+		var numConfigs int32
+		fbConfigs := glxChooseFBConfig(dpy, screen, &fbAttribs[0], &numConfigs)
+		if fbConfigs != 0 && numConfigs > 0 {
+			// Use first FBConfig
+			fbConfig = *(*uintptr)(unsafe.Pointer(fbConfigs))
+			visual = glxGetVisualFromFBConfig(dpy, fbConfig)
+			if visual != nil && glxCreateContextAttribsARB != nil {
+				// Create OpenGL 3.0 context
+				ctxAttribs := []int32{
+					glxContextMajorVersionArb, 3,
+					glxContextMinorVersionArb, 0,
+					glxContextFlagsArb, glxContextCoreProfileBitArb,
+					glxNone,
+				}
+				ctx = glxCreateContextAttribsARB(dpy, fbConfig, 0, 1, &ctxAttribs[0])
+			}
+		}
+	}
+
+	// Fallback to legacy path if GL 3.0 context creation failed
+	if ctx == 0 {
+		attrs := []int32{glxRGBA, glxDoubleBuffer, glxDepthSize, 24, glxNone}
+		visual = glxChooseVisual(dpy, screen, &attrs[0])
+		if visual == nil {
+			xCloseDisplay(dpy)
+			runtime.UnlockOSThread()
+			return nil, errors.New("glXChooseVisual failed")
+		}
+		ctx = glxCreateContext(dpy, visual, 0, 1)
+		if ctx == 0 {
+			xCloseDisplay(dpy)
+			runtime.UnlockOSThread()
+			return nil, errors.New("glXCreateContext failed")
+		}
+	}
+
 	if visual == nil {
 		xCloseDisplay(dpy)
 		runtime.UnlockOSThread()
-		return nil, errors.New("glXChooseVisual failed")
+		return nil, errors.New("failed to get visual")
 	}
 
 	cmap := xCreateColormap(dpy, root, visual.Visual, 0)
@@ -149,6 +223,9 @@ func New(title string, width, height int, _ bool) (Window, error) {
 		unsafe.Pointer(&swa),
 	)
 	if win == 0 {
+		if ctx != 0 {
+			glxDestroyContext(dpy, ctx)
+		}
 		xCloseDisplay(dpy)
 		runtime.UnlockOSThread()
 		return nil, errors.New("XCreateWindow failed")
@@ -162,13 +239,6 @@ func New(title string, width, height int, _ bool) (Window, error) {
 	wmDelete := xInternAtom(dpy, cString("WM_DELETE_WINDOW"), 0)
 	xSetWMProtocols(dpy, win, &wmDelete, 1)
 
-	ctx := glxCreateContext(dpy, visual, 0, 1)
-	if ctx == 0 {
-		xDestroyWindow(dpy, win)
-		xCloseDisplay(dpy)
-		runtime.UnlockOSThread()
-		return nil, errors.New("glXCreateContext failed")
-	}
 	if glxMakeCurrent(dpy, win, ctx) == 0 {
 		glxDestroyContext(dpy, ctx)
 		xDestroyWindow(dpy, win)
@@ -515,6 +585,21 @@ func registerGLX() {
 	purego.RegisterLibFunc(&glxMakeCurrent, gllib, "glXMakeCurrent")
 	purego.RegisterLibFunc(&glxSwapBuffers, gllib, "glXSwapBuffers")
 	purego.RegisterLibFunc(&glxDestroyContext, gllib, "glXDestroyContext")
+
+	// Try to register GLX_ARB_create_context functions
+	if _, err := purego.Dlsym(gllib, "glXChooseFBConfig"); err == nil {
+		purego.RegisterLibFunc(&glxChooseFBConfig, gllib, "glXChooseFBConfig")
+	}
+	if _, err := purego.Dlsym(gllib, "glXGetVisualFromFBConfig"); err == nil {
+		purego.RegisterLibFunc(&glxGetVisualFromFBConfig, gllib, "glXGetVisualFromFBConfig")
+	}
+	if _, err := purego.Dlsym(gllib, "glXCreateContextAttribsARB"); err == nil {
+		purego.RegisterLibFunc(&glxCreateContextAttribsARB, gllib, "glXCreateContextAttribsARB")
+	}
+	// glXGetProcAddressARB is needed for loading OpenGL functions
+	if _, err := purego.Dlsym(gllib, "glXGetProcAddressARB"); err == nil {
+		purego.RegisterLibFunc(&glXGetProcAddressARB, gllib, "glXGetProcAddressARB")
+	}
 }
 
 func cString(s string) *byte {

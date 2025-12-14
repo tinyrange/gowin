@@ -36,6 +36,12 @@ const (
 	cwUseDefault = 0x80000000
 
 	errorClassAlreadyExists = 1410
+
+	// WGL_ARB_create_context constants
+	wglContextMajorVersionArb   = 0x2091
+	wglContextMinorVersionArb   = 0x2092
+	wglContextFlagsArb          = 0x2094
+	wglContextCoreProfileBitArb = 0x00000001
 )
 
 type (
@@ -142,9 +148,10 @@ var (
 	procSwapBuffers         = gdi32.NewProc("SwapBuffers")
 	procGetObjectType       = gdi32.NewProc("GetObjectType")
 
-	procWglCreateContext = opengl32.NewProc("wglCreateContext")
-	procWglMakeCurrent   = opengl32.NewProc("wglMakeCurrent")
-	procWglDeleteContext = opengl32.NewProc("wglDeleteContext")
+	procWglCreateContext  = opengl32.NewProc("wglCreateContext")
+	procWglMakeCurrent    = opengl32.NewProc("wglMakeCurrent")
+	procWglDeleteContext  = opengl32.NewProc("wglDeleteContext")
+	procWglGetProcAddress = opengl32.NewProc("wglGetProcAddress")
 
 	procGetModuleHandle = kernel32.NewProc("GetModuleHandleW")
 	procSetLastError    = kernel32.NewProc("SetLastError")
@@ -571,20 +578,64 @@ func enumAndSetPixelFormat(
 }
 
 func createGLContext(hdc hdc) (hglrc, error) {
+	// First create a temporary legacy context to bootstrap
 	clearLastError()
-	ctx, _, _ := procWglCreateContext.Call(uintptr(hdc))
-	if ctx == 0 {
-		return 0, winErr("wglCreateContext")
+	tempCtx, _, _ := procWglCreateContext.Call(uintptr(hdc))
+	if tempCtx == 0 {
+		return 0, winErr("wglCreateContext (temp)")
 	}
 
 	clearLastError()
-	ret, _, _ := procWglMakeCurrent.Call(uintptr(hdc), ctx)
+	ret, _, _ := procWglMakeCurrent.Call(uintptr(hdc), tempCtx)
 	if ret == 0 {
-		procWglDeleteContext.Call(ctx)
-		return 0, winErr("wglMakeCurrent")
+		procWglDeleteContext.Call(tempCtx)
+		return 0, winErr("wglMakeCurrent (temp)")
 	}
 
-	return hglrc(ctx), nil
+	// Try to load wglCreateContextAttribsARB
+	var finalCtx hglrc
+	procName := syscall.StringBytePtr("wglCreateContextAttribsARB")
+	procAddr, _, _ := procWglGetProcAddress.Call(uintptr(unsafe.Pointer(procName)))
+	if procAddr != 0 {
+		// We have WGL_ARB_create_context support
+		createContextAttribsARB := *(*func(uintptr, uintptr, uintptr, *int32) uintptr)(unsafe.Pointer(&procAddr))
+
+		attribs := []int32{
+			wglContextMajorVersionArb, 3,
+			wglContextMinorVersionArb, 0,
+			wglContextFlagsArb, wglContextCoreProfileBitArb,
+			0,
+		}
+
+		clearLastError()
+		newCtx := createContextAttribsARB(uintptr(hdc), 0, uintptr(unsafe.Pointer(&attribs[0])), nil)
+		if newCtx != 0 {
+			// Make the new context current
+			clearLastError()
+			ret, _, _ := procWglMakeCurrent.Call(uintptr(hdc), newCtx)
+			if ret != 0 {
+				// Success! Delete temp context
+				procWglDeleteContext.Call(tempCtx)
+				finalCtx = hglrc(newCtx)
+			} else {
+				// Failed to make new context current, clean up and fall back
+				procWglDeleteContext.Call(newCtx)
+				finalCtx = hglrc(tempCtx)
+			}
+		} else {
+			// Failed to create GL 3.0 context, use temp context
+			finalCtx = hglrc(tempCtx)
+		}
+	} else {
+		// No WGL_ARB_create_context support, use legacy context
+		finalCtx = hglrc(tempCtx)
+	}
+
+	if finalCtx == 0 {
+		return 0, errors.New("failed to create OpenGL context")
+	}
+
+	return finalCtx, nil
 }
 
 func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
