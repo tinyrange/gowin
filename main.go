@@ -29,7 +29,7 @@ func main() {
 	}
 
 	gfx.SetClear(true)
-	gfx.SetClearColor(graphics.Color{0.1, 0.12, 0.16, 1.0})
+	gfx.SetClearColor(color.RGBA{R: 26, G: 31, B: 41, A: 255}) // 0.1*255 ≈ 26, 0.12*255 ≈ 31, 0.16*255 ≈ 41
 
 	tex, err := makeCheckerTexture(gfx)
 	if err != nil {

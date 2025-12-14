@@ -2,6 +2,7 @@ package text
 
 import (
 	_ "embed"
+	"image/color"
 
 	"github.com/tinyrange/gowin/internal/graphics"
 )
@@ -37,13 +38,14 @@ func Load(win graphics.Window) (*Renderer, error) {
 	}, nil
 }
 
-func (r *Renderer) RenderText(s string, x, y float32, size float64, color graphics.Color) float32 {
+func (r *Renderer) RenderText(s string, x, y float32, size float64, c color.Color) float32 {
 	if r == nil || r.stash == nil {
 		return x
 	}
 
 	r.stash.BeginDraw()
-	next := r.stash.DrawText(r.font, size, float64(x), float64(y), s, [4]float32(color))
+	rgba := graphics.ColorToFloat32(c)
+	next := r.stash.DrawText(r.font, size, float64(x), float64(y), s, rgba)
 	r.stash.EndDraw()
 	return float32(next)
 }

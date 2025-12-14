@@ -3,6 +3,7 @@ package graphics
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"time"
 	"unsafe"
@@ -46,7 +47,7 @@ type glWindow struct {
 	gl       glpkg.OpenGL
 
 	clearEnabled bool
-	clearColor   Color
+	clearColor   color.Color
 	scale        float32
 
 	// GL3 resources
@@ -247,8 +248,8 @@ func (w *glWindow) SetClear(enabled bool) {
 	w.clearEnabled = enabled
 }
 
-func (w *glWindow) SetClearColor(color Color) {
-	w.clearColor = color
+func (w *glWindow) SetClearColor(c color.Color) {
+	w.clearColor = c
 }
 
 func (w *glWindow) Loop(step func(f Frame) error) error {
@@ -291,7 +292,8 @@ func (w *glWindow) prepareFrame() {
 	w.gl.UniformMatrix4fv(w.projUniform, 1, false, &proj[0])
 
 	if w.clearEnabled {
-		w.gl.ClearColor(w.clearColor[0], w.clearColor[1], w.clearColor[2], w.clearColor[3])
+		rgba := ColorToFloat32(w.clearColor)
+		w.gl.ClearColor(rgba[0], rgba[1], rgba[2], rgba[3])
 		w.gl.Clear(glpkg.ColorBufferBit)
 	}
 }
@@ -326,7 +328,7 @@ func (f glFrame) GetButtonState(button window.Button) window.ButtonState {
 	return f.w.platform.GetButtonState(button)
 }
 
-func (f glFrame) RenderQuad(x, y, width, height float32, tex Texture, color Color) {
+func (f glFrame) RenderQuad(x, y, width, height float32, tex Texture, c color.Color) {
 	t, ok := tex.(*glTexture)
 	if !ok {
 		return
@@ -338,16 +340,19 @@ func (f glFrame) RenderQuad(x, y, width, height float32, tex Texture, color Colo
 	texUniform := f.w.gl.GetUniformLocation(f.w.shaderProgram, "u_texture")
 	f.w.gl.Uniform1i(texUniform, 0)
 
+	// Convert color to float32 RGBA
+	rgba := ColorToFloat32(c)
+
 	// Update vertex buffer with quad data (2 triangles)
 	vertices := [6 * 8]float32{
 		// Triangle 1
-		x, y, 0, 0, color[0], color[1], color[2], color[3], // top-left
-		x + width, y, 1, 0, color[0], color[1], color[2], color[3], // top-right
-		x, y + height, 0, 1, color[0], color[1], color[2], color[3], // bottom-left
+		x, y, 0, 0, rgba[0], rgba[1], rgba[2], rgba[3], // top-left
+		x + width, y, 1, 0, rgba[0], rgba[1], rgba[2], rgba[3], // top-right
+		x, y + height, 0, 1, rgba[0], rgba[1], rgba[2], rgba[3], // bottom-left
 		// Triangle 2
-		x + width, y, 1, 0, color[0], color[1], color[2], color[3], // top-right
-		x + width, y + height, 1, 1, color[0], color[1], color[2], color[3], // bottom-right
-		x, y + height, 0, 1, color[0], color[1], color[2], color[3], // bottom-left
+		x + width, y, 1, 0, rgba[0], rgba[1], rgba[2], rgba[3], // top-right
+		x + width, y + height, 1, 1, rgba[0], rgba[1], rgba[2], rgba[3], // bottom-right
+		x, y + height, 0, 1, rgba[0], rgba[1], rgba[2], rgba[3], // bottom-left
 	}
 
 	f.w.gl.BindBuffer(glpkg.ArrayBuffer, f.w.vbo)

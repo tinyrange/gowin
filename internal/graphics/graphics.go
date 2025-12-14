@@ -2,26 +2,36 @@ package graphics
 
 import (
 	"image"
+	"image/color"
 
 	"github.com/tinyrange/gowin/internal/window"
 )
 
-// Color represents an RGBA color with components in the range [0, 1].
-type Color [4]float32
+// ColorToFloat32 converts a color.Color to RGBA float32 values in the range [0, 1].
+func ColorToFloat32(c color.Color) [4]float32 {
+	r, g, b, a := c.RGBA()
+	// RGBA() returns values in range [0, 0xffff], convert to [0, 1]
+	return [4]float32{
+		float32(r) / 0xffff,
+		float32(g) / 0xffff,
+		float32(b) / 0xffff,
+		float32(a) / 0xffff,
+	}
+}
 
-// Default colors
+// Default colors using image/color types
 var (
-	ColorBlack     = Color{0, 0, 0, 1}
-	ColorWhite     = Color{1, 1, 1, 1}
-	ColorRed       = Color{1, 0, 0, 1}
-	ColorGreen     = Color{0, 1, 0, 1}
-	ColorBlue      = Color{0, 0, 1, 1}
-	ColorYellow    = Color{1, 1, 0, 1}
-	ColorCyan      = Color{0, 1, 1, 1}
-	ColorMagenta   = Color{1, 0, 1, 1}
-	ColorGray      = Color{0.5, 0.5, 0.5, 1}
-	ColorDarkGray  = Color{0.25, 0.25, 0.25, 1}
-	ColorLightGray = Color{0.75, 0.75, 0.75, 1}
+	ColorBlack     = color.RGBA{R: 0, G: 0, B: 0, A: 255}
+	ColorWhite     = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	ColorRed       = color.RGBA{R: 255, G: 0, B: 0, A: 255}
+	ColorGreen     = color.RGBA{R: 0, G: 255, B: 0, A: 255}
+	ColorBlue      = color.RGBA{R: 0, G: 0, B: 255, A: 255}
+	ColorYellow    = color.RGBA{R: 255, G: 255, B: 0, A: 255}
+	ColorCyan      = color.RGBA{R: 0, G: 255, B: 255, A: 255}
+	ColorMagenta   = color.RGBA{R: 255, G: 0, B: 255, A: 255}
+	ColorGray      = color.RGBA{R: 128, G: 128, B: 128, A: 255}
+	ColorDarkGray  = color.RGBA{R: 64, G: 64, B: 64, A: 255}
+	ColorLightGray = color.RGBA{R: 192, G: 192, B: 192, A: 255}
 )
 
 type Frame interface {
@@ -31,7 +41,7 @@ type Frame interface {
 	GetKeyState(key window.Key) window.KeyState
 	GetButtonState(button window.Button) window.ButtonState
 
-	RenderQuad(x, y, width, height float32, tex Texture, color Color)
+	RenderQuad(x, y, width, height float32, tex Texture, color color.Color)
 
 	Screenshot() (image.Image, error)
 }
@@ -48,7 +58,7 @@ type Window interface {
 	NewTexture(image.Image) (Texture, error)
 
 	SetClear(enabled bool)
-	SetClearColor(color Color)
+	SetClearColor(color color.Color)
 
 	// Scale returns the display scaling factor (e.g., 1.0 for 96 DPI, 2.0 for 192 DPI).
 	Scale() float32
