@@ -16,6 +16,7 @@ type glWindow struct {
 
 	clearEnabled bool
 	clearColor   [4]float32
+	scale        float32
 }
 
 type glTexture struct {
@@ -72,11 +73,16 @@ func newWithProfile(title string, width, height int, useCoreProfile bool) (Windo
 		gl:           gl,
 		clearEnabled: true,
 		clearColor:   [4]float32{0, 0, 0, 1},
+		scale:        platform.Scale(),
 	}, nil
 }
 
 func (w *glWindow) PlatformWindow() window.Window {
 	return w.platform
+}
+
+func (w *glWindow) Scale() float32 {
+	return w.scale
 }
 
 func (w *glWindow) NewTexture(img image.Image) (Texture, error) {
@@ -137,7 +143,10 @@ func (w *glWindow) prepareFrame() {
 	w.gl.Viewport(0, 0, int32(bw), int32(bh))
 	w.gl.MatrixMode(glpkg.Projection)
 	w.gl.LoadIdentity()
-	w.gl.Ortho(0, float64(bw), float64(bh), 0, -1, 1)
+	// Apply scale factor: scale the coordinate system so that logical coordinates
+	// are automatically scaled by the DPI factor. This means coordinates specified
+	// by the application will be rendered larger on high-DPI displays.
+	w.gl.Ortho(0, float64(bw)/float64(w.scale), float64(bh)/float64(w.scale), 0, -1, 1)
 	w.gl.MatrixMode(glpkg.ModelView)
 	w.gl.LoadIdentity()
 
@@ -152,7 +161,10 @@ func (f glFrame) WindowSize() (int, int) {
 }
 
 func (f glFrame) CursorPos() (float32, float32) {
-	return f.w.platform.Cursor()
+	x, y := f.w.platform.Cursor()
+	// Convert from physical pixel coordinates to logical coordinates
+	// by dividing by the scale factor
+	return x / f.w.scale, y / f.w.scale
 }
 
 func (f glFrame) GetKeyState(window.Key) KeyState {

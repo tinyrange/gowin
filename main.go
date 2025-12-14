@@ -1,28 +1,31 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"log"
+	"log/slog"
+	"os"
 
-	"github.com/tinyrange/gowin/internal/gl"
 	"github.com/tinyrange/gowin/internal/graphics"
 	"github.com/tinyrange/gowin/internal/text"
 )
 
 func main() {
-	gfx, err := graphics.New("Pure Go GL Demo", 800, 600)
+	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	screenshot := fs.Bool("screenshot", false, "take a screenshot and exit")
+
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		log.Fatalf("parse flags: %v", err)
+	}
+
+	gfx, err := graphics.New("OpenGL Demo in Go", 800, 600)
 	if err != nil {
 		log.Fatalf("init: %v", err)
 	}
-
-	ogl, err := gfx.PlatformWindow().GL()
-	if err != nil {
-		log.Fatalf("gl: %v", err)
-	}
-
-	log.Printf("OpenGL version: %s", ogl.GetString(gl.Version))
-	log.Printf("OpenGL vendor: %s", ogl.GetString(gl.Vendor))
 
 	gfx.SetClear(true)
 	gfx.SetClearColor(0.1, 0.12, 0.16, 1.0)
@@ -39,31 +42,38 @@ func main() {
 
 	const quadSize = 200.0
 
+	slog.Info("Scale", "scale", gfx.Scale())
+
 	err = gfx.Loop(func(f graphics.Frame) error {
 		x, y := f.CursorPos()
 
 		f.RenderQuad(x, y, float32(quadSize), float32(quadSize), tex, [4]float32{1, 1, 1, 1})
 
-		font.RenderText("The quick brown fox jumps over the lazy dog.", 10, 24, 16, [4]float32{1, 1, 0, 1})
+		text := fmt.Sprintf("The quick brown fox jumps over the lazy dog.\nScale = %f", gfx.Scale())
 
-		// screenshot, err := f.Screenshot()
-		// if err != nil {
-		// 	log.Fatalf("screenshot: %v", err)
-		// }
+		font.RenderText(text, 10, 24, 16, [4]float32{1, 1, 0, 1})
 
-		// screenshotPath := "screenshot.png"
+		if *screenshot {
+			screenshot, err := f.Screenshot()
+			if err != nil {
+				log.Fatalf("screenshot: %v", err)
+			}
 
-		// file, err := os.Create(screenshotPath)
-		// if err != nil {
-		// 	return fmt.Errorf("create screenshot file: %v", err)
-		// }
-		// defer file.Close()
+			screenshotPath := "screenshot.png"
 
-		// if err := png.Encode(file, screenshot); err != nil {
-		// 	return fmt.Errorf("encode screenshot: %v", err)
-		// }
+			file, err := os.Create(screenshotPath)
+			if err != nil {
+				return fmt.Errorf("create screenshot file: %v", err)
+			}
+			defer file.Close()
 
-		// return fmt.Errorf("taken screenshot at %s", screenshotPath)
+			if err := png.Encode(file, screenshot); err != nil {
+				return fmt.Errorf("encode screenshot: %v", err)
+			}
+
+			return fmt.Errorf("taken screenshot at %s", screenshotPath)
+		}
+
 		return nil
 	})
 	if err != nil {

@@ -360,3 +360,10 @@ func (c *Cocoa) cursorBackingPos() (float32, float32) {
 	backing := objc.Send[NSRect](c.view, selConvertRectToBacking, rect)
 	return float32(backing.Origin.X), float32(backing.Origin.Y)
 }
+
+func (c *Cocoa) Scale() float32 {
+	// macOS handles scaling automatically through BackingSize()
+	// which already accounts for Retina scaling, so we return 1.0
+	// as the coordinate system is already scaled appropriately.
+	return 1.0
+}

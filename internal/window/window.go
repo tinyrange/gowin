@@ -9,4 +9,5 @@ type Window interface {
 	Swap()
 	BackingSize() (width, height int)
 	Cursor() (x, y float32)
+	Scale() float32
 }

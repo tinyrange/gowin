@@ -348,6 +348,11 @@ func (w *winWindow) Cursor() (float32, float32) {
 	return float32(p.x), float32(p.y)
 }
 
+func (w *winWindow) Scale() float32 {
+	// TODO: Implement Windows DPI detection
+	return 1.0
+}
+
 func registerWindowClass() error {
 	cb := syscall.NewCallback(wndProc)
 	wc := wndClassEx{

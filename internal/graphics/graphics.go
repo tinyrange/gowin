@@ -68,6 +68,9 @@ type Window interface {
 	SetClear(enabled bool)
 	SetClearColor(r, g, b, a float32)
 
+	// Scale returns the display scaling factor (e.g., 1.0 for 96 DPI, 2.0 for 192 DPI).
+	Scale() float32
+
 	// Call f for each frame until it returns an error.
 	Loop(func(f Frame) error) error
 }
