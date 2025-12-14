@@ -464,14 +464,32 @@ func (stash *Stash) DrawText(idx int, size, x, y float64, s string, color [4]flo
 		return 0
 	}
 
+	// Store the initial x position for newline handling
+	startX := x
+	// Get line height for newline handling
+	_, _, lineHeight := stash.VMetrics(idx, size)
+
 	var q *Quad
 
 	b := []byte(s)
 	for len(b) > 0 {
-		r, size := utf8.DecodeRune(b)
+		r, runeSize := utf8.DecodeRune(b)
+		
+		// Handle newline character
+		if r == '\n' {
+			x = startX
+			if stash.yInverted {
+				y += lineHeight
+			} else {
+				y -= lineHeight
+			}
+			b = b[runeSize:]
+			continue
+		}
+		
 		glyph := stash.GetGlyph(fnt, int(r), isize)
 		if glyph == nil {
-			b = b[size:]
+			b = b[runeSize:]
 			continue
 		}
 		texture := glyph.texture
@@ -502,7 +520,7 @@ func (stash *Stash) DrawText(idx int, size, x, y float64, s string, color [4]flo
 		texture.verts[texture.nverts*4+2] = q.s0
 		texture.verts[texture.nverts*4+3] = q.t1
 		texture.nverts++
-		b = b[size:]
+		b = b[runeSize:]
 	}
 
 	return x
