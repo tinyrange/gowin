@@ -15,7 +15,7 @@ type glWindow struct {
 	gl       glpkg.OpenGL
 
 	clearEnabled bool
-	clearColor   [4]float32
+	clearColor   Color
 	scale        float32
 }
 
@@ -72,7 +72,7 @@ func newWithProfile(title string, width, height int, useCoreProfile bool) (Windo
 		platform:     platform,
 		gl:           gl,
 		clearEnabled: true,
-		clearColor:   [4]float32{0, 0, 0, 1},
+		clearColor:   ColorBlack,
 		scale:        platform.Scale(),
 	}, nil
 }
@@ -116,8 +116,8 @@ func (w *glWindow) SetClear(enabled bool) {
 	w.clearEnabled = enabled
 }
 
-func (w *glWindow) SetClearColor(r, g, b, a float32) {
-	w.clearColor = [4]float32{r, g, b, a}
+func (w *glWindow) SetClearColor(color Color) {
+	w.clearColor = color
 }
 
 func (w *glWindow) Loop(step func(f Frame) error) error {
@@ -175,7 +175,7 @@ func (f glFrame) GetButtonState(window.Button) ButtonState {
 	return ButtonStateUp
 }
 
-func (f glFrame) RenderQuad(x, y, width, height float32, tex Texture, color [4]float32) {
+func (f glFrame) RenderQuad(x, y, width, height float32, tex Texture, color Color) {
 	t, ok := tex.(*glTexture)
 	if !ok {
 		return

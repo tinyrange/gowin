@@ -28,7 +28,7 @@ func main() {
 	}
 
 	gfx.SetClear(true)
-	gfx.SetClearColor(0.1, 0.12, 0.16, 1.0)
+	gfx.SetClearColor(graphics.Color{0.1, 0.12, 0.16, 1.0})
 
 	tex, err := makeCheckerTexture(gfx)
 	if err != nil {
@@ -47,11 +47,11 @@ func main() {
 	err = gfx.Loop(func(f graphics.Frame) error {
 		x, y := f.CursorPos()
 
-		f.RenderQuad(x, y, float32(quadSize), float32(quadSize), tex, [4]float32{1, 1, 1, 1})
+		f.RenderQuad(x, y, float32(quadSize), float32(quadSize), tex, graphics.ColorWhite)
 
 		text := fmt.Sprintf("The quick brown fox jumps over the lazy dog.\nScale = %f", gfx.Scale())
 
-		font.RenderText(text, 10, 24, 16, [4]float32{1, 1, 0, 1})
+		font.RenderText(text, 10, 24, 16, graphics.ColorYellow)
 
 		if *screenshot {
 			screenshot, err := f.Screenshot()

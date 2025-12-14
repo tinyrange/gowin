@@ -33,13 +33,13 @@ func Load(win graphics.Window) (*Renderer, error) {
 	}, nil
 }
 
-func (r *Renderer) RenderText(s string, x, y float32, size float64, color [4]float32) float32 {
+func (r *Renderer) RenderText(s string, x, y float32, size float64, color graphics.Color) float32 {
 	if r == nil || r.stash == nil {
 		return x
 	}
 
 	r.stash.BeginDraw()
-	next := r.stash.DrawText(r.font, size, float64(x), float64(y), s, color)
+	next := r.stash.DrawText(r.font, size, float64(x), float64(y), s, [4]float32(color))
 	r.stash.EndDraw()
 	return float32(next)
 }
