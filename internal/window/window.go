@@ -10,4 +10,6 @@ type Window interface {
 	BackingSize() (width, height int)
 	Cursor() (x, y float32)
 	Scale() float32
+	GetKeyState(key Key) KeyState
+	GetButtonState(button Button) ButtonState
 }

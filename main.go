@@ -12,6 +12,7 @@ import (
 
 	"github.com/tinyrange/gowin/internal/graphics"
 	"github.com/tinyrange/gowin/internal/text"
+	"github.com/tinyrange/gowin/internal/window"
 )
 
 func main() {
@@ -40,14 +41,43 @@ func main() {
 		log.Fatalf("font: %v", err)
 	}
 
-	const quadSize = 200.0
+	var quadSize = 200.0
+	var moveSpeed float32 = 5.0
+
+	// Initialize WASD-controlled quad position (center of window)
+	var wasdX, wasdY float32 = 300, 200
 
 	slog.Info("Scale", "scale", gfx.Scale())
 
 	err = gfx.Loop(func(f graphics.Frame) error {
-		x, y := f.CursorPos()
+		// Get mouse position
+		mouseX, mouseY := f.CursorPos()
 
-		f.RenderQuad(x, y, float32(quadSize), float32(quadSize), tex, graphics.ColorWhite)
+		// Handle WASD movement
+		if f.GetKeyState(window.KeyW).IsDown() {
+			wasdY -= moveSpeed
+		}
+		if f.GetKeyState(window.KeyS).IsDown() {
+			wasdY += moveSpeed
+		}
+		if f.GetKeyState(window.KeyA).IsDown() {
+			wasdX -= moveSpeed
+		}
+		if f.GetKeyState(window.KeyD).IsDown() {
+			wasdX += moveSpeed
+		}
+
+		// Determine mouse quad color based on click state
+		mouseColor := graphics.ColorWhite
+		if f.GetButtonState(window.ButtonLeft).IsDown() {
+			mouseColor = graphics.ColorRed
+		}
+
+		// Render mouse-controlled quad
+		f.RenderQuad(mouseX, mouseY, float32(quadSize), float32(quadSize), tex, mouseColor)
+
+		// Render WASD-controlled quad
+		f.RenderQuad(wasdX, wasdY, float32(quadSize), float32(quadSize), tex, graphics.ColorBlue)
 
 		// Set viewport for text rendering
 		w, h := f.WindowSize()

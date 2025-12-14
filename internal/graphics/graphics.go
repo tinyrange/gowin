@@ -24,48 +24,12 @@ var (
 	ColorLightGray = Color{0.75, 0.75, 0.75, 1}
 )
 
-type KeyState int
-
-const (
-	// The key was pressed this frame
-	KeyStatePressed KeyState = iota
-	// The key is currently down
-	KeyStateDown
-	// The key was released this frame
-	KeyStateReleased
-	// The key is currently up
-	KeyStateUp
-	// The key is being held down (repeated)
-	KeyStateRepeated
-)
-
-func (ks KeyState) IsDown() bool {
-	return ks == KeyStatePressed || ks == KeyStateDown || ks == KeyStateRepeated
-}
-
-type ButtonState int
-
-const (
-	// The mouse button was pressed this frame
-	ButtonStatePressed ButtonState = iota
-	// The mouse button is currently down
-	ButtonStateDown
-	// The mouse button was released this frame
-	ButtonStateReleased
-	// The mouse button is currently up
-	ButtonStateUp
-)
-
-func (bs ButtonState) IsDown() bool {
-	return bs == ButtonStatePressed || bs == ButtonStateDown
-}
-
 type Frame interface {
 	WindowSize() (width, height int)
 	CursorPos() (x, y float32)
 
-	GetKeyState(key window.Key) KeyState
-	GetButtonState(button window.Button) ButtonState
+	GetKeyState(key window.Key) window.KeyState
+	GetButtonState(button window.Button) window.ButtonState
 
 	RenderQuad(x, y, width, height float32, tex Texture, color Color)
 

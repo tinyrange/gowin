@@ -360,6 +360,16 @@ func (w *winWindow) Scale() float32 {
 	return 1.0
 }
 
+func (w *winWindow) GetKeyState(key Key) KeyState {
+	// TODO: Implement key state tracking
+	return KeyStateUp
+}
+
+func (w *winWindow) GetButtonState(button Button) ButtonState {
+	// TODO: Implement button state tracking
+	return ButtonStateUp
+}
+
 func registerWindowClass() error {
 	cb := syscall.NewCallback(wndProc)
 	wc := wndClassEx{

@@ -367,3 +367,13 @@ func (c *Cocoa) Scale() float32 {
 	// as the coordinate system is already scaled appropriately.
 	return 1.0
 }
+
+func (c *Cocoa) GetKeyState(key Key) KeyState {
+	// TODO: Implement key state tracking
+	return KeyStateUp
+}
+
+func (c *Cocoa) GetButtonState(button Button) ButtonState {
+	// TODO: Implement button state tracking
+	return ButtonStateUp
+}

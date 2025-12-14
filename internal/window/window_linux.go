@@ -37,6 +37,10 @@ const (
 
 	clientMessage = 33
 	destroyNotify = 17
+	keyPress      = 2
+	keyRelease    = 3
+	buttonPress   = 4
+	buttonRelease = 5
 )
 
 type XVisualInfo struct {
@@ -65,6 +69,50 @@ type xclientMessage struct {
 	Data        [5]uint64
 }
 
+// xEvent is an aligned XEvent-sized buffer (192 bytes on 64-bit Xlib).
+// We use uint64 words to guarantee 8-byte alignment for unsafe casts.
+type xEvent [24]uint64
+
+type xKeyEvent struct {
+	Type       int32
+	_          int32 // padding (align Serial)
+	Serial     uint64
+	SendEvent  int32 // X11 Bool
+	_          int32 // padding (align pointers)
+	Display    uintptr
+	Window     uintptr
+	Root       uintptr
+	Subwindow  uintptr
+	Time       uint64 // X11 Time is unsigned long in Xlib
+	X          int32
+	Y          int32
+	XRoot      int32
+	YRoot      int32
+	State      uint32
+	KeyCode    uint32
+	SameScreen int32
+}
+
+type xButtonEvent struct {
+	Type       int32
+	_          int32 // padding (align Serial)
+	Serial     uint64
+	SendEvent  int32 // X11 Bool
+	_          int32 // padding (align pointers)
+	Display    uintptr
+	Window     uintptr
+	Root       uintptr
+	Subwindow  uintptr
+	Time       uint64 // X11 Time is unsigned long in Xlib
+	X          int32
+	Y          int32
+	XRoot      int32
+	YRoot      int32
+	State      uint32
+	Button     uint32
+	SameScreen int32
+}
+
 var (
 	x11lib uintptr
 	gllib  uintptr
@@ -90,6 +138,7 @@ var (
 	xDisplayHeight         func(uintptr, int32) int32
 	xDisplayHeightMM       func(uintptr, int32) int32
 	xResourceManagerString func(uintptr) *byte
+	xLookupKeysym          func(*xKeyEvent, int32) uint32
 
 	glxChooseVisual            func(uintptr, int32, *int32) *XVisualInfo
 	glxCreateContext           func(uintptr, *XVisualInfo, uintptr, int32) uintptr
@@ -103,12 +152,14 @@ var (
 )
 
 type x11Window struct {
-	display  uintptr
-	window   uintptr
-	ctx      uintptr
-	wmDelete uintptr
-	running  bool
-	scale    float32
+	display      uintptr
+	window       uintptr
+	ctx          uintptr
+	wmDelete     uintptr
+	running      bool
+	scale        float32
+	keyStates    map[Key]KeyState
+	buttonStates map[Button]ButtonState
 }
 
 func New(title string, width, height int, _ bool) (Window, error) {
@@ -251,12 +302,14 @@ func New(title string, width, height int, _ bool) (Window, error) {
 	scale := calculateScale(dpy, screen)
 
 	w := &x11Window{
-		display:  dpy,
-		window:   win,
-		ctx:      ctx,
-		wmDelete: wmDelete,
-		running:  true,
-		scale:    scale,
+		display:      dpy,
+		window:       win,
+		ctx:          ctx,
+		wmDelete:     wmDelete,
+		running:      true,
+		scale:        scale,
+		keyStates:    make(map[Key]KeyState),
+		buttonStates: make(map[Button]ButtonState),
 	}
 	return w, nil
 }
@@ -288,8 +341,24 @@ func (w *x11Window) Poll() bool {
 		return false
 	}
 
+	// Transition states: Pressed -> Down, Released -> Up
+	for key, state := range w.keyStates {
+		if state == KeyStatePressed {
+			w.keyStates[key] = KeyStateDown
+		} else if state == KeyStateReleased {
+			w.keyStates[key] = KeyStateUp
+		}
+	}
+	for button, state := range w.buttonStates {
+		if state == ButtonStatePressed {
+			w.buttonStates[button] = ButtonStateDown
+		} else if state == ButtonStateReleased {
+			w.buttonStates[button] = ButtonStateUp
+		}
+	}
+
 	for xPending(w.display) > 0 {
-		var ev [192]byte
+		var ev xEvent
 		xNextEvent(w.display, unsafe.Pointer(&ev[0]))
 		etype := *(*int32)(unsafe.Pointer(&ev[0]))
 		switch etype {
@@ -300,6 +369,34 @@ func (w *x11Window) Poll() bool {
 			}
 		case destroyNotify:
 			w.running = false
+		case keyPress:
+			kev := (*xKeyEvent)(unsafe.Pointer(&ev[0]))
+			key := w.keycodeToKey(kev)
+			if key != KeyUnknown {
+				// Treat missing entries as Up (map default is 0 which equals Pressed).
+				prev := w.GetKeyState(key)
+				if prev == KeyStateUp || prev == KeyStateReleased {
+					w.keyStates[key] = KeyStatePressed
+				} else {
+					w.keyStates[key] = KeyStateRepeated
+				}
+			}
+		case keyRelease:
+			kev := (*xKeyEvent)(unsafe.Pointer(&ev[0]))
+			key := w.keycodeToKey(kev)
+			if key != KeyUnknown {
+				w.keyStates[key] = KeyStateReleased
+			}
+		case buttonPress:
+			bev := (*xButtonEvent)(unsafe.Pointer(&ev[0]))
+			if button := w.buttonToButton(bev.Button); button >= ButtonLeft && button <= Button5 {
+				w.buttonStates[button] = ButtonStatePressed
+			}
+		case buttonRelease:
+			bev := (*xButtonEvent)(unsafe.Pointer(&ev[0]))
+			if button := w.buttonToButton(bev.Button); button >= ButtonLeft && button <= Button5 {
+				w.buttonStates[button] = ButtonStateReleased
+			}
 		}
 	}
 	return w.running
@@ -334,6 +431,254 @@ func (w *x11Window) Cursor() (float32, float32) {
 
 func (w *x11Window) Scale() float32 {
 	return w.scale
+}
+
+func (w *x11Window) GetKeyState(key Key) KeyState {
+	if state, ok := w.keyStates[key]; ok {
+		return state
+	}
+	return KeyStateUp
+}
+
+func (w *x11Window) GetButtonState(button Button) ButtonState {
+	if state, ok := w.buttonStates[button]; ok {
+		return state
+	}
+	return ButtonStateUp
+}
+
+// keycodeToKey converts an X11 keycode to our Key enum
+func (w *x11Window) keycodeToKey(kev *xKeyEvent) Key {
+	if xLookupKeysym == nil {
+		return KeyUnknown
+	}
+
+	// Use XLookupKeysym with index 0 (no modifiers)
+	keysym := xLookupKeysym(kev, 0)
+	if keysym == 0 {
+		return KeyUnknown
+	}
+
+	// Map X11 keysyms to our Key enum
+	// X11 keysym values are defined in X11/keysymdef.h
+	switch keysym {
+	// Letters (case-insensitive, X11 provides both)
+	case 0x0061, 0x0041: // 'a' or 'A'
+		return KeyA
+	case 0x0062, 0x0042: // 'b' or 'B'
+		return KeyB
+	case 0x0063, 0x0043: // 'c' or 'C'
+		return KeyC
+	case 0x0064, 0x0044: // 'd' or 'D'
+		return KeyD
+	case 0x0065, 0x0045: // 'e' or 'E'
+		return KeyE
+	case 0x0066, 0x0046: // 'f' or 'F'
+		return KeyF
+	case 0x0067, 0x0047: // 'g' or 'G'
+		return KeyG
+	case 0x0068, 0x0048: // 'h' or 'H'
+		return KeyH
+	case 0x0069, 0x0049: // 'i' or 'I'
+		return KeyI
+	case 0x006a, 0x004a: // 'j' or 'J'
+		return KeyJ
+	case 0x006b, 0x004b: // 'k' or 'K'
+		return KeyK
+	case 0x006c, 0x004c: // 'l' or 'L'
+		return KeyL
+	case 0x006d, 0x004d: // 'm' or 'M'
+		return KeyM
+	case 0x006e, 0x004e: // 'n' or 'N'
+		return KeyN
+	case 0x006f, 0x004f: // 'o' or 'O'
+		return KeyO
+	case 0x0070, 0x0050: // 'p' or 'P'
+		return KeyP
+	case 0x0071, 0x0051: // 'q' or 'Q'
+		return KeyQ
+	case 0x0072, 0x0052: // 'r' or 'R'
+		return KeyR
+	case 0x0073, 0x0053: // 's' or 'S'
+		return KeyS
+	case 0x0074, 0x0054: // 't' or 'T'
+		return KeyT
+	case 0x0075, 0x0055: // 'u' or 'U'
+		return KeyU
+	case 0x0076, 0x0056: // 'v' or 'V'
+		return KeyV
+	case 0x0077, 0x0057: // 'w' or 'W'
+		return KeyW
+	case 0x0078, 0x0058: // 'x' or 'X'
+		return KeyX
+	case 0x0079, 0x0059: // 'y' or 'Y'
+		return KeyY
+	case 0x007a, 0x005a: // 'z' or 'Z'
+		return KeyZ
+
+	// Numbers
+	case 0x0030: // '0'
+		return Key0
+	case 0x0031: // '1'
+		return Key1
+	case 0x0032: // '2'
+		return Key2
+	case 0x0033: // '3'
+		return Key3
+	case 0x0034: // '4'
+		return Key4
+	case 0x0035: // '5'
+		return Key5
+	case 0x0036: // '6'
+		return Key6
+	case 0x0037: // '7'
+		return Key7
+	case 0x0038: // '8'
+		return Key8
+	case 0x0039: // '9'
+		return Key9
+
+	// Function keys
+	case 0xffbe: // XK_F1
+		return KeyF1
+	case 0xffbf: // XK_F2
+		return KeyF2
+	case 0xffc0: // XK_F3
+		return KeyF3
+	case 0xffc1: // XK_F4
+		return KeyF4
+	case 0xffc2: // XK_F5
+		return KeyF5
+	case 0xffc3: // XK_F6
+		return KeyF6
+	case 0xffc4: // XK_F7
+		return KeyF7
+	case 0xffc5: // XK_F8
+		return KeyF8
+	case 0xffc6: // XK_F9
+		return KeyF9
+	case 0xffc7: // XK_F10
+		return KeyF10
+	case 0xffc8: // XK_F11
+		return KeyF11
+	case 0xffc9: // XK_F12
+		return KeyF12
+
+	// Modifier keys
+	case 0xffe1: // XK_Shift_L
+		return KeyLeftShift
+	case 0xffe2: // XK_Shift_R
+		return KeyRightShift
+	case 0xffe3: // XK_Control_L
+		return KeyLeftControl
+	case 0xffe4: // XK_Control_R
+		return KeyRightControl
+	case 0xffe9: // XK_Alt_L
+		return KeyLeftAlt
+	case 0xffea: // XK_Alt_R
+		return KeyRightAlt
+	case 0xffeb: // XK_Super_L
+		return KeyLeftSuper
+	case 0xffec: // XK_Super_R
+		return KeyRightSuper
+
+	// Special keys
+	case 0x0020: // XK_space
+		return KeySpace
+	case 0xff0d: // XK_Return
+		return KeyEnter
+	case 0xff1b: // XK_Escape
+		return KeyEscape
+	case 0xff08: // XK_BackSpace
+		return KeyBackspace
+	case 0xffff: // XK_Delete
+		return KeyDelete
+	case 0xff09: // XK_Tab
+		return KeyTab
+	case 0xffe5: // XK_Caps_Lock
+		return KeyCapsLock
+	case 0xff14: // XK_Scroll_Lock
+		return KeyScrollLock
+	case 0xff7f: // XK_Num_Lock
+		return KeyNumLock
+	case 0xff61: // XK_Print
+		return KeyPrintScreen
+	case 0xff13: // XK_Pause
+		return KeyPause
+
+	// Arrow keys
+	case 0xff52: // XK_Up
+		return KeyUp
+	case 0xff54: // XK_Down
+		return KeyDown
+	case 0xff51: // XK_Left
+		return KeyLeft
+	case 0xff53: // XK_Right
+		return KeyRight
+
+	// Navigation keys
+	case 0xff50: // XK_Home
+		return KeyHome
+	case 0xff57: // XK_End
+		return KeyEnd
+	case 0xff55: // XK_Page_Up
+		return KeyPageUp
+	case 0xff56: // XK_Page_Down
+		return KeyPageDown
+	case 0xff63: // XK_Insert
+		return KeyInsert
+
+	// Punctuation
+	case 0x0060, 0x007e: // XK_grave, XK_asciitilde
+		return KeyGraveAccent
+	case 0x002d, 0x005f: // XK_minus, XK_underscore
+		return KeyMinus
+	case 0x003d, 0x002b: // XK_equal, XK_plus
+		return KeyEqual
+	case 0x005b, 0x007b: // XK_bracketleft, XK_braceleft
+		return KeyLeftBracket
+	case 0x005d, 0x007d: // XK_bracketright, XK_braceright
+		return KeyRightBracket
+	case 0x005c, 0x007c: // XK_backslash, XK_bar
+		return KeyBackslash
+	case 0x003b, 0x003a: // XK_semicolon, XK_colon
+		return KeySemicolon
+	case 0x0027, 0x0022: // XK_apostrophe, XK_quotedbl
+		return KeyApostrophe
+	case 0x002c, 0x003c: // XK_comma, XK_less
+		return KeyComma
+	case 0x002e, 0x003e: // XK_period, XK_greater
+		return KeyPeriod
+	case 0x002f, 0x003f: // XK_slash, XK_question
+		return KeySlash
+	}
+
+	return KeyUnknown
+}
+
+// buttonToButton converts an X11 button number to our Button enum
+// Returns Button5+1 (invalid) for unknown buttons, which can be checked with >= ButtonLeft && <= Button5
+func (w *x11Window) buttonToButton(x11Button uint32) Button {
+	// X11 button mapping:
+	// 1 = left button
+	// 2 = middle button
+	// 3 = right button
+	// 4 = scroll up
+	// 5 = scroll down
+	switch x11Button {
+	case 1:
+		return ButtonLeft
+	case 2:
+		return ButtonMiddle
+	case 3:
+		return ButtonRight
+	case 4:
+		return Button4
+	case 5:
+		return Button5
+	default:
+		return Button5 + 1 // Invalid button (outside valid range)
+	}
 }
 
 // calculateScale calculates the display scale factor based on DPI.
@@ -576,6 +921,13 @@ func registerX11() {
 	} else {
 		// Function not available, will fall back to DPI calculation
 		xResourceManagerString = nil
+	}
+	// Try to register XLookupKeysym, but don't fail if it's not available
+	if _, err := purego.Dlsym(x11lib, "XLookupKeysym"); err == nil {
+		purego.RegisterLibFunc(&xLookupKeysym, x11lib, "XLookupKeysym")
+	} else {
+		// Function not available, key mapping will be limited
+		xLookupKeysym = nil
 	}
 }
 

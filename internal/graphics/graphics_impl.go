@@ -318,12 +318,12 @@ func (f glFrame) CursorPos() (float32, float32) {
 	return x / f.w.scale, y / f.w.scale
 }
 
-func (f glFrame) GetKeyState(window.Key) KeyState {
-	return KeyStateUp
+func (f glFrame) GetKeyState(key window.Key) window.KeyState {
+	return f.w.platform.GetKeyState(key)
 }
 
-func (f glFrame) GetButtonState(window.Button) ButtonState {
-	return ButtonStateUp
+func (f glFrame) GetButtonState(button window.Button) window.ButtonState {
+	return f.w.platform.GetButtonState(button)
 }
 
 func (f glFrame) RenderQuad(x, y, width, height float32, tex Texture, color Color) {
