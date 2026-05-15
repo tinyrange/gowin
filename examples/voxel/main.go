@@ -17,16 +17,20 @@ import (
 var errDone = errors.New("voxel demo complete")
 
 const (
-	chunkSize    = 16
-	playerRadius = float32(0.32)
-	playerHeight = float32(1.78)
-	eyeHeight    = float32(1.58)
-	gravity      = float32(24)
-	jumpSpeed    = float32(8.2)
-	walkSpeed    = float32(5.2)
-	sprintSpeed  = float32(8.4)
-	reach        = float32(7)
+	chunkSize          = 16
+	defaultWorldSeed   = uint64(0x6d2b79f5a4c3e21b)
+	maxEnqueuePerFrame = 96
+	playerRadius       = float32(0.32)
+	playerHeight       = float32(1.78)
+	eyeHeight          = float32(1.58)
+	gravity            = float32(24)
+	jumpSpeed          = float32(8.2)
+	walkSpeed          = float32(5.2)
+	sprintSpeed        = float32(8.4)
+	reach              = float32(7)
 )
+
+var worldSeed = defaultWorldSeed
 
 type chunkKey struct {
 	X int
@@ -55,6 +59,7 @@ const (
 
 type chunk struct {
 	key         chunkKey
+	seed        uint64
 	blocks      [chunkSize * chunkSize * chunkSize]blockKind
 	mesh        *gowin.Mesh
 	draw        *gowin.DrawCommand
@@ -66,14 +71,17 @@ type chunk struct {
 }
 
 type chunkJob struct {
-	key  chunkKey
-	lod  int
-	dist int
+	key      chunkKey
+	lod      int
+	dist     int
+	seed     uint64
+	revision uint64
 }
 
 type chunkResult struct {
-	chunk   *chunk
-	elapsed time.Duration
+	chunk    *chunk
+	revision uint64
+	elapsed  time.Duration
 }
 
 type rayHit struct {
@@ -97,6 +105,8 @@ type demo struct {
 	scene           *gowin.Scene
 	chunks          map[chunkKey]*chunk
 	pending         map[chunkKey]bool
+	loadCenter      chunkKey
+	loadRevision    uint64
 	jobs            chan chunkJob
 	results         chan chunkResult
 	stopWorkers     chan struct{}
@@ -160,11 +170,11 @@ func (d *demo) startWorkers() {
 					return
 				case job := <-d.jobs:
 					start := time.Now()
-					c := generateChunk(job.key)
+					c := generateChunk(job.key, job.seed)
 					c.lod = job.lod
 					c.loadDist = job.dist
 					select {
-					case d.results <- chunkResult{chunk: c, elapsed: time.Since(start)}:
+					case d.results <- chunkResult{chunk: c, revision: job.revision, elapsed: time.Since(start)}:
 					case <-d.stopWorkers:
 						return
 					}
@@ -525,6 +535,12 @@ func findSpawnPoint() gowin.Vec3 {
 func (d *demo) streamChunks(ctx *gowin.Context) error {
 	d.processChunkResults(ctx)
 	center := worldChunk(d.player.X, d.player.Y, d.player.Z)
+	if center != d.loadCenter {
+		d.loadCenter = center
+		d.loadRevision++
+		d.pending = map[chunkKey]bool{}
+		d.drainChunkQueues()
+	}
 	if d.viewRadius == 0 {
 		d.viewRadius = 16
 	}
@@ -562,6 +578,7 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 	})
 	d.visibleVertices = 0
 	draws := 0
+	enqueued := 0
 	for _, candidate := range candidates {
 		if draws >= d.drawBudget || d.visibleVertices >= d.vertexBudget {
 			break
@@ -570,7 +587,9 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		needed[key] = true
 		c := d.chunks[key]
 		if c == nil {
-			d.enqueueChunk(candidate)
+			if enqueued < maxEnqueuePerFrame && d.enqueueChunk(candidate) {
+				enqueued++
+			}
 			continue
 		}
 		if c.lod != candidate.lod {
@@ -623,7 +642,7 @@ func (d *demo) processChunkResults(ctx *gowin.Context) {
 		select {
 		case result := <-d.results:
 			c := result.chunk
-			if c == nil || !d.pending[c.key] {
+			if c == nil || result.revision != d.loadRevision || !d.pending[c.key] {
 				continue
 			}
 			delete(d.pending, c.key)
@@ -642,15 +661,36 @@ func (d *demo) processChunkResults(ctx *gowin.Context) {
 	}
 }
 
-func (d *demo) enqueueChunk(candidate chunkCandidate) {
+func (d *demo) drainChunkQueues() {
+	for {
+		select {
+		case <-d.jobs:
+		default:
+			goto results
+		}
+	}
+results:
+	for {
+		select {
+		case <-d.results:
+		default:
+			return
+		}
+	}
+}
+
+func (d *demo) enqueueChunk(candidate chunkCandidate) bool {
 	if d.jobs == nil || d.pending[candidate.key] {
-		return
+		return false
 	}
 	d.pending[candidate.key] = true
+	seed := chunkSeed(worldSeed, candidate.key)
 	select {
-	case d.jobs <- chunkJob{key: candidate.key, lod: candidate.lod, dist: candidate.dist}:
+	case d.jobs <- chunkJob{key: candidate.key, lod: candidate.lod, dist: candidate.dist, seed: seed, revision: d.loadRevision}:
+		return true
 	default:
 		delete(d.pending, candidate.key)
+		return false
 	}
 }
 
@@ -671,8 +711,8 @@ func lodForDistance(dist int) int {
 	}
 }
 
-func generateChunk(key chunkKey) *chunk {
-	c := &chunk{key: key, dirty: true}
+func generateChunk(key chunkKey, seed uint64) *chunk {
+	c := &chunk{key: key, seed: seed, dirty: true}
 	for z := 0; z < chunkSize; z++ {
 		for x := 0; x < chunkSize; x++ {
 			wx := key.X*chunkSize + x
@@ -1002,7 +1042,7 @@ func floatingIslandDensity(b worldBlock) float64 {
 }
 
 func islandParams(cellX, cellZ int) (cx, cy, cz, rx, ry, rz float64) {
-	h := hash3(cellX, 97, cellZ)
+	h := hashSeeded3(worldSeed, cellX, 97, cellZ)
 	cx = float64(cellX*160+80) + float64(int(h&63)-31)
 	cz = float64(cellZ*160+80) + float64(int((h>>6)&63)-31)
 	cy = 78 + float64(int((h>>12)&63))
@@ -1180,10 +1220,20 @@ func grad3(ix, iy, iz int, x, y, z float64) float64 {
 }
 
 func hash3(x, y, z int) uint32 {
-	h := uint32(x*374761393 + y*668265263 + z*2246822519)
-	h ^= h >> 13
-	h *= 1274126177
-	return h ^ (h >> 16)
+	return uint32(hashSeeded3(worldSeed, x, y, z))
+}
+
+func chunkSeed(seed uint64, key chunkKey) uint64 {
+	return hashSeeded3(seed, key.X, key.Y, key.Z)
+}
+
+func hashSeeded3(seed uint64, x, y, z int) uint64 {
+	h := seed ^ uint64(uint32(x))*0x9e3779b185ebca87 ^ uint64(uint32(y))*0xc2b2ae3d27d4eb4f ^ uint64(uint32(z))*0x165667b19e3779f9
+	h ^= h >> 30
+	h *= 0xbf58476d1ce4e5b9
+	h ^= h >> 27
+	h *= 0x94d049bb133111eb
+	return h ^ (h >> 31)
 }
 
 type facePoint struct {
@@ -1209,11 +1259,13 @@ var cubeFaces = []cubeFace{
 
 func main() {
 	frames := flag.Int("frames", 0, "exit after this many frames; 0 runs interactively")
+	seed := flag.Uint64("seed", defaultWorldSeed, "world generation seed")
 	view := flag.Int("view", 16, "maximum chunk radius to consider")
 	vertical := flag.Int("vertical", 8, "vertical chunk radius to consider")
 	drawBudget := flag.Int("draw-budget", 1000, "maximum visible chunk draw commands")
 	vertexBudget := flag.Int("vertex-budget", 2200000, "maximum visible mesh vertices")
 	flag.Parse()
+	worldSeed = *seed
 	err := gowin.Run(&demo{
 		maxFrames:      *frames,
 		viewRadius:     *view,

@@ -10,7 +10,8 @@ func BenchmarkChunkGeneration16(b *testing.B) {
 	spawn := findSpawnPoint()
 	center := worldChunk(spawn.X, spawn.Y, spawn.Z)
 	for i := 0; i < b.N; i++ {
-		c := generateChunk(chunkKey{X: center.X + (i & 1), Y: center.Y, Z: center.Z + ((i >> 1) & 1)})
+		key := chunkKey{X: center.X + (i & 1), Y: center.Y, Z: center.Z + ((i >> 1) & 1)}
+		c := generateChunk(key, chunkSeed(worldSeed, key))
 		if countChunkBlocks(c) == 0 {
 			b.Fatal("generated empty chunk")
 		}
@@ -133,7 +134,7 @@ func benchmarkWorld(center chunkKey, radius, vertical int) *demo {
 		for z := -radius; z <= radius; z++ {
 			for x := -radius; x <= radius; x++ {
 				key := chunkKey{X: center.X + x, Y: center.Y + y, Z: center.Z + z}
-				d.chunks[key] = generateChunk(key)
+				d.chunks[key] = generateChunk(key, chunkSeed(worldSeed, key))
 			}
 		}
 	}
