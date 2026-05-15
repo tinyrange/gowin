@@ -97,7 +97,7 @@ type demo struct {
 func (d *demo) Init(ctx *gowin.Context) error {
 	d.scene = gowin.NewScene()
 	d.chunks = map[chunkKey]*chunk{}
-	d.player = gowin.Vec3{X: 4.5, Y: float32(surfaceHeight(4, 8) + 3), Z: 8.5}
+	d.player = findSpawnPoint()
 	d.yaw = -0.8
 	d.pitch = -0.15
 	ctx.SetMouseCaptured(true)
@@ -182,8 +182,8 @@ func (d *demo) updatePhysics(ctx *gowin.Context, dt float32) error {
 	d.moveAxis('z', d.vel.Z*dt)
 	d.onGround = false
 	d.moveAxis('y', d.vel.Y*dt)
-	if d.player.Y < -16 {
-		d.player = gowin.Vec3{X: 4.5, Y: float32(surfaceHeight(4, 8) + 4), Z: 8.5}
+	if d.player.Y < -64 {
+		d.player = findSpawnPoint()
 		d.vel = gowin.Vec3{}
 	}
 	return nil
@@ -364,6 +364,27 @@ func blockIntersectsPlayer(block worldBlock, player gowin.Vec3) bool {
 		float32(block.Y) < player.Y+playerHeight
 }
 
+func findSpawnPoint() gowin.Vec3 {
+	for radius := 0; radius <= 256; radius += 8 {
+		for z := -radius; z <= radius; z += 8 {
+			for x := -radius; x <= radius; x += 8 {
+				if abs(x) != radius && abs(z) != radius {
+					continue
+				}
+				for y := 170; y >= 24; y-- {
+					if generatedBlock(worldBlock{X: x, Y: y, Z: z}) == 0 {
+						continue
+					}
+					if generatedBlock(worldBlock{X: x, Y: y + 1, Z: z}) == 0 && generatedBlock(worldBlock{X: x, Y: y + 2, Z: z}) == 0 {
+						return gowin.Vec3{X: float32(x) + 0.5, Y: float32(y + 1), Z: float32(z) + 0.5}
+					}
+				}
+			}
+		}
+	}
+	return gowin.Vec3{X: 80.5, Y: 150, Z: 80.5}
+}
+
 func (d *demo) streamChunks(ctx *gowin.Context) error {
 	center := worldChunk(d.player.X, d.player.Y, d.player.Z)
 	if d.viewRadius == 0 {
@@ -473,19 +494,15 @@ func (d *demo) newChunk(key chunkKey) *chunk {
 		for x := 0; x < chunkSize; x++ {
 			wx := key.X*chunkSize + x
 			wz := key.Z*chunkSize + z
-			h := surfaceHeight(wx, wz)
 			for y := 0; y < chunkSize; y++ {
 				world := worldBlock{
 					X: wx,
 					Y: key.Y*chunkSize + y,
 					Z: wz,
 				}
-				if kind := generatedTerrainBlock(world, h); kind != 0 {
+				if kind := generatedBlock(world); kind != 0 {
 					c.setLocal(blockKey{X: x, Y: y, Z: z}, kind)
 				}
-			}
-			if shouldGrowTree(wx, wz, h) {
-				stampTree(c, wx, h, wz)
 			}
 		}
 	}
@@ -736,95 +753,11 @@ func appendBox(data *gowin.MeshData, min, max gowin.Vec3, col color.Color) {
 }
 
 func generatedBlock(b worldBlock) blockKind {
-	h := surfaceHeight(b.X, b.Z)
-	if tree := treeBlock(b); tree != 0 {
-		return tree
-	}
-	return generatedTerrainBlock(b, h)
-}
-
-func generatedTerrainBlock(b worldBlock, h int) blockKind {
-	if b.Y > h {
-		if kind := floatingIslandBlock(b); kind != 0 {
-			return kind
-		}
-		return 0
-	}
-	if b.Y < -28 {
-		return blockStone
-	}
-	if caveCarves(b, h) {
-		if h-b.Y > 8 && crystalPocket(b) {
-			return blockCrystal
-		}
-		return 0
-	}
-	if b.Y == h {
-		if h > 24 {
-			return blockSnow
-		}
-		if h < 7 {
-			return blockSand
-		}
-		return blockGrass
-	}
-	if h-b.Y < 4 {
-		if h < 7 {
-			return blockSand
-		}
-		return blockDirt
-	}
-	return blockStone
-}
-
-func stampTree(c *chunk, wx, h, wz int) {
-	baseX := wx - c.key.X*chunkSize
-	baseZ := wz - c.key.Z*chunkSize
-	for y := h + 1; y <= h+5; y++ {
-		ly := y - c.key.Y*chunkSize
-		if ly >= 0 && ly < chunkSize {
-			c.setLocal(blockKey{X: baseX, Y: ly, Z: baseZ}, blockWood)
-		}
-	}
-	for y := h + 4; y <= h+7; y++ {
-		ly := y - c.key.Y*chunkSize
-		if ly < 0 || ly >= chunkSize {
-			continue
-		}
-		for dz := -2; dz <= 2; dz++ {
-			for dx := -2; dx <= 2; dx++ {
-				lx := baseX + dx
-				lz := baseZ + dz
-				if lx < 0 || lx >= chunkSize || lz < 0 || lz >= chunkSize {
-					continue
-				}
-				if abs(dx)+abs(dz)+max(0, y-(h+5)) <= 4 {
-					c.setLocal(blockKey{X: lx, Y: ly, Z: lz}, blockLeaves)
-				}
-			}
-		}
-	}
-}
-
-func surfaceHeight(x, z int) int {
-	rolling := math.Sin(float64(x)*0.075) + math.Cos(float64(z)*0.063)
-	ridge := math.Abs(math.Sin(float64(x-z) * 0.031))
-	rough := valueNoise2(x, z, 0.08)*4 + valueNoise2(x+71, z-19, 0.21)*2
-	return 13 + int(math.Round(rolling*5.4+ridge*10.5+rough))
-}
-
-func caveCarves(b worldBlock, surface int) bool {
-	if surface-b.Y < 3 {
-		return false
-	}
-	tunnel := math.Sin(float64(b.X)*0.16+float64(b.Y)*0.11) +
-		math.Cos(float64(b.Z)*0.15-float64(b.Y)*0.07) +
-		valueNoise3(b.X, b.Y, b.Z, 0.13)*1.8
-	return tunnel > 2.1 || valueNoise3(b.X+400, b.Y-70, b.Z, 0.055) > 0.72
+	return floatingIslandBlock(b)
 }
 
 func crystalPocket(b worldBlock) bool {
-	return hash3(b.X, b.Y, b.Z)%29 == 0 && valueNoise3(b.X, b.Y, b.Z, 0.18) > 0.45
+	return hash3(b.X, b.Y, b.Z)%29 == 0 && perlinFBM(float64(b.X)*0.09, float64(b.Y)*0.09, float64(b.Z)*0.09, 3) > 0.32
 }
 
 func floatingIslandBlock(b worldBlock) blockKind {
@@ -832,9 +765,9 @@ func floatingIslandBlock(b worldBlock) blockKind {
 	if density <= 0 {
 		return 0
 	}
-	above := worldBlock{X: b.X, Y: b.Y + 1, Z: b.Z}
-	if floatingIslandDensity(above) <= 0.04 {
-		if b.Y > 96 {
+	above := floatingIslandDensity(worldBlock{X: b.X, Y: b.Y + 1, Z: b.Z})
+	if above <= 0.04 {
+		if b.Y > 100 {
 			return blockSnow
 		}
 		return blockGrass
@@ -849,66 +782,34 @@ func floatingIslandBlock(b worldBlock) blockKind {
 }
 
 func floatingIslandDensity(b worldBlock) float64 {
-	if b.Y < 34 || b.Y > 142 {
+	if b.Y < 24 || b.Y > 168 {
 		return -1
 	}
-	best := -2.0
-	cellX := floorDiv(b.X, 96)
-	cellZ := floorDiv(b.Z, 96)
-	for dz := -1; dz <= 1; dz++ {
-		for dx := -1; dx <= 1; dx++ {
-			cx, cy, cz, rx, ry, rz := islandParams(cellX+dx, cellZ+dz)
-			nx := (float64(b.X) - cx) / rx
-			ny := (float64(b.Y) - cy) / ry
-			nz := (float64(b.Z) - cz) / rz
-			shell := 1 - (nx*nx + nz*nz + math.Abs(ny)*ny*1.15)
-			warp := valueNoise3(b.X+int(cx), b.Y, b.Z+int(cz), 0.045)*0.32 +
-				valueNoise3(b.X, b.Y+91, b.Z, 0.11)*0.12
-			density := shell + warp
-			if density > best {
-				best = density
-			}
-		}
+	cellX := floorDiv(b.X, 160)
+	cellZ := floorDiv(b.Z, 160)
+	cx, cy, cz, rx, ry, rz := islandParams(cellX, cellZ)
+	nx := (float64(b.X) - cx) / rx
+	ny := (float64(b.Y) - cy) / ry
+	nz := (float64(b.Z) - cz) / rz
+	shell := 1 - (nx*nx + nz*nz + math.Abs(ny)*ny*1.32)
+	warp := perlinFBM((float64(b.X)-cx)*0.025, (float64(b.Y)-cy)*0.033, (float64(b.Z)-cz)*0.025, 3) * 0.58
+	carve := perlinFBM(float64(b.X)*0.052+31, float64(b.Y)*0.052-17, float64(b.Z)*0.052+9, 2)
+	density := shell + warp
+	if carve > 0.48 && density < 0.52 {
+		density -= 0.72
 	}
-	return best
+	return density
 }
 
 func islandParams(cellX, cellZ int) (cx, cy, cz, rx, ry, rz float64) {
 	h := hash3(cellX, 97, cellZ)
-	cx = float64(cellX*96+48) + float64(int(h&31)-15)
-	cz = float64(cellZ*96+48) + float64(int((h>>5)&31)-15)
-	cy = 70 + float64(int((h>>10)&31)) + valueNoise2(cellX*19, cellZ*23, 0.7)*18
-	rx = 32 + float64((h>>15)&31)
-	rz = 30 + float64((h>>20)&31)
-	ry = 24 + float64((h>>25)&31)
+	cx = float64(cellX*160+80) + float64(int(h&63)-31)
+	cz = float64(cellZ*160+80) + float64(int((h>>6)&63)-31)
+	cy = 78 + float64(int((h>>12)&63))
+	rx = 54 + float64((h>>18)&63)
+	rz = 50 + float64((h>>24)&63)
+	ry = 30 + float64((h>>10)&31)
 	return
-}
-
-func treeBlock(b worldBlock) blockKind {
-	for dz := -2; dz <= 2; dz++ {
-		for dx := -2; dx <= 2; dx++ {
-			baseX := b.X - dx
-			baseZ := b.Z - dz
-			h := surfaceHeight(baseX, baseZ)
-			if !shouldGrowTree(baseX, baseZ, h) {
-				continue
-			}
-			if b.X == baseX && b.Z == baseZ && b.Y >= h+1 && b.Y <= h+5 {
-				return blockWood
-			}
-			if b.Y < h+4 || b.Y > h+7 {
-				continue
-			}
-			if abs(dx)+abs(dz)+max(0, b.Y-(h+5)) <= 4 {
-				return blockLeaves
-			}
-		}
-	}
-	return 0
-}
-
-func shouldGrowTree(x, z, h int) bool {
-	return h > 9 && h < 25 && hash3(x, h, z)%61 == 0
 }
 
 func blockFaceColor(kind blockKind, normal gowin.Vec3, b worldBlock) color.Color {
@@ -1012,14 +913,70 @@ func max(a, b int) int {
 	return b
 }
 
-func valueNoise2(x, z int, scale float64) float64 {
-	return math.Sin(float64(x)*scale+float64(z)*scale*0.37) * 0.5
+func perlinFBM(x, y, z float64, octaves int) float64 {
+	var sum, amp, norm float64
+	amp = 1
+	for i := 0; i < octaves; i++ {
+		sum += perlin3(x, y, z) * amp
+		norm += amp
+		x *= 2.03
+		y *= 2.03
+		z *= 2.03
+		amp *= 0.5
+	}
+	if norm == 0 {
+		return 0
+	}
+	return sum / norm
 }
 
-func valueNoise3(x, y, z int, scale float64) float64 {
-	return (math.Sin(float64(x)*scale+float64(y)*scale*0.71) +
-		math.Cos(float64(z)*scale-float64(y)*scale*0.43) +
-		math.Sin(float64(x+z)*scale*0.61)) / 3
+func perlin3(x, y, z float64) float64 {
+	x0 := int(math.Floor(x))
+	y0 := int(math.Floor(y))
+	z0 := int(math.Floor(z))
+	xf := x - float64(x0)
+	yf := y - float64(y0)
+	zf := z - float64(z0)
+	u := fade(xf)
+	v := fade(yf)
+	w := fade(zf)
+
+	x00 := lerp(grad3(x0, y0, z0, xf, yf, zf), grad3(x0+1, y0, z0, xf-1, yf, zf), u)
+	x10 := lerp(grad3(x0, y0+1, z0, xf, yf-1, zf), grad3(x0+1, y0+1, z0, xf-1, yf-1, zf), u)
+	x01 := lerp(grad3(x0, y0, z0+1, xf, yf, zf-1), grad3(x0+1, y0, z0+1, xf-1, yf, zf-1), u)
+	x11 := lerp(grad3(x0, y0+1, z0+1, xf, yf-1, zf-1), grad3(x0+1, y0+1, z0+1, xf-1, yf-1, zf-1), u)
+	y0v := lerp(x00, x10, v)
+	y1v := lerp(x01, x11, v)
+	return lerp(y0v, y1v, w)
+}
+
+func fade(t float64) float64 {
+	return t * t * t * (t*(t*6-15) + 10)
+}
+
+func lerp(a, b, t float64) float64 {
+	return a + (b-a)*t
+}
+
+func grad3(ix, iy, iz int, x, y, z float64) float64 {
+	h := hash3(ix, iy, iz) & 15
+	u := x
+	if h >= 8 {
+		u = y
+	}
+	v := y
+	if h == 12 || h == 14 {
+		v = x
+	} else if h >= 4 {
+		v = z
+	}
+	if h&1 != 0 {
+		u = -u
+	}
+	if h&2 != 0 {
+		v = -v
+	}
+	return u + v
 }
 
 func hash3(x, y, z int) uint32 {

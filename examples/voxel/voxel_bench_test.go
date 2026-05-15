@@ -7,9 +7,11 @@ import (
 )
 
 func BenchmarkChunkGeneration16(b *testing.B) {
+	spawn := findSpawnPoint()
+	center := worldChunk(spawn.X, spawn.Y, spawn.Z)
 	for i := 0; i < b.N; i++ {
 		d := benchmarkDemo()
-		c := d.newChunk(chunkKey{X: i & 15, Y: 0, Z: (i >> 4) & 15})
+		c := d.newChunk(chunkKey{X: center.X + (i & 1), Y: center.Y, Z: center.Z + ((i >> 1) & 1)})
 		if countChunkBlocks(c) == 0 {
 			b.Fatal("generated empty chunk")
 		}
@@ -27,8 +29,10 @@ func countChunkBlocks(c *chunk) int {
 }
 
 func BenchmarkChunkMesh16WithNeighbors(b *testing.B) {
-	d := benchmarkWorld(1, 1)
-	key := chunkKey{}
+	spawn := findSpawnPoint()
+	center := worldChunk(spawn.X, spawn.Y, spawn.Z)
+	d := benchmarkWorld(center, 1, 1)
+	key := center
 	c := d.chunks[key]
 	if c == nil {
 		b.Fatal("missing center chunk")
@@ -45,12 +49,14 @@ func BenchmarkChunkMesh16WithNeighbors(b *testing.B) {
 
 func BenchmarkFarViewCPUStream(b *testing.B) {
 	const radius = 4
+	spawn := findSpawnPoint()
+	center := worldChunk(spawn.X, spawn.Y, spawn.Z)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		d := benchmarkWorld(radius, 3)
+		d := benchmarkWorld(center, radius, 3)
 		var vertices int
 		for _, c := range d.chunks {
-			c.lod = lodForDistance(max(abs(c.key.X), max(abs(c.key.Y), abs(c.key.Z))))
+			c.lod = lodForDistance(max(abs(c.key.X-center.X), max(abs(c.key.Y-center.Y), abs(c.key.Z-center.Z))))
 			data := d.buildChunkMesh(c)
 			vertices += len(data.Vertices)
 		}
@@ -67,12 +73,12 @@ func benchmarkDemo() *demo {
 	}
 }
 
-func benchmarkWorld(radius, vertical int) *demo {
+func benchmarkWorld(center chunkKey, radius, vertical int) *demo {
 	d := benchmarkDemo()
 	for y := -vertical; y <= vertical; y++ {
 		for z := -radius; z <= radius; z++ {
 			for x := -radius; x <= radius; x++ {
-				key := chunkKey{X: x, Y: y, Z: z}
+				key := chunkKey{X: center.X + x, Y: center.Y + y, Z: center.Z + z}
 				d.chunks[key] = d.newChunk(key)
 			}
 		}
