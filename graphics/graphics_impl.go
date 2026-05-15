@@ -168,6 +168,18 @@ type glMesh3D struct {
 
 func (*glMesh3D) isMesh3D() {}
 
+type glShader3D struct {
+	program           uint32
+	modelUniform      int32
+	viewUniform       int32
+	projectionUniform int32
+	lightUniform      int32
+	ambientUniform    int32
+	w                 *glWindow
+}
+
+func (*glShader3D) isShader3D() {}
+
 type glFrame struct {
 	w *glWindow
 }
@@ -779,6 +791,25 @@ func (w *glWindow) NewMesh3D(vertices []Vertex3D, indices []uint32) (Mesh3D, err
 	return m, nil
 }
 
+func (w *glWindow) NewShader3D(vertexSource, fragmentSource string) (Shader3D, error) {
+	if vertexSource == "" || fragmentSource == "" {
+		return nil, fmt.Errorf("shader sources must not be empty")
+	}
+	program, err := createShaderProgram(w.gl, vertexSource, fragmentSource)
+	if err != nil {
+		return nil, err
+	}
+	return &glShader3D{
+		program:           program,
+		modelUniform:      w.gl.GetUniformLocation(program, "u_model"),
+		viewUniform:       w.gl.GetUniformLocation(program, "u_view"),
+		projectionUniform: w.gl.GetUniformLocation(program, "u_projection"),
+		lightUniform:      w.gl.GetUniformLocation(program, "u_lightDirection"),
+		ambientUniform:    w.gl.GetUniformLocation(program, "u_ambient"),
+		w:                 w,
+	}, nil
+}
+
 func (m *glDynamicMesh) UpdateVertices(offset int, vertices []Vertex) {
 	if len(vertices) == 0 {
 		return
@@ -881,6 +912,15 @@ func (m *glMesh3D) Destroy() {
 	w.removeMesh3D(m)
 	m.indexCount = 0
 	m.w = nil
+}
+
+func (s *glShader3D) Destroy() {
+	if s == nil || s.w == nil || s.program == 0 {
+		return
+	}
+	s.w.gl.DeleteProgram(s.program)
+	s.program = 0
+	s.w = nil
 }
 
 func (w *glWindow) destroyMeshBuffers(vao, vbo, ebo *uint32) {
@@ -986,13 +1026,38 @@ func (f glFrame) RenderMesh3D(mesh Mesh3D, opts Draw3DOptions) {
 	}
 	model, view, projection, ambient, light := f.resolve3DOptions(opts)
 
+	program := f.w.shader3DProgram
+	modelUniform := f.w.model3DUniform
+	viewUniform := f.w.view3DUniform
+	projectionUniform := f.w.projection3DUniform
+	lightUniform := f.w.light3DUniform
+	ambientUniform := f.w.ambient3DUniform
+	if shader, ok := opts.Shader.(*glShader3D); ok && shader != nil && shader.program != 0 {
+		program = shader.program
+		modelUniform = shader.modelUniform
+		viewUniform = shader.viewUniform
+		projectionUniform = shader.projectionUniform
+		lightUniform = shader.lightUniform
+		ambientUniform = shader.ambientUniform
+	}
+
 	f.w.gl.Enable(glpkg.DepthTest)
-	f.w.gl.UseProgram(f.w.shader3DProgram)
-	f.w.gl.UniformMatrix4fv(f.w.model3DUniform, 1, false, &model[0])
-	f.w.gl.UniformMatrix4fv(f.w.view3DUniform, 1, false, &view[0])
-	f.w.gl.UniformMatrix4fv(f.w.projection3DUniform, 1, false, &projection[0])
-	f.w.gl.Uniform4f(f.w.light3DUniform, light.X, light.Y, light.Z, 0)
-	f.w.gl.Uniform1f(f.w.ambient3DUniform, ambient)
+	f.w.gl.UseProgram(program)
+	if modelUniform >= 0 {
+		f.w.gl.UniformMatrix4fv(modelUniform, 1, false, &model[0])
+	}
+	if viewUniform >= 0 {
+		f.w.gl.UniformMatrix4fv(viewUniform, 1, false, &view[0])
+	}
+	if projectionUniform >= 0 {
+		f.w.gl.UniformMatrix4fv(projectionUniform, 1, false, &projection[0])
+	}
+	if lightUniform >= 0 {
+		f.w.gl.Uniform4f(lightUniform, light.X, light.Y, light.Z, 0)
+	}
+	if ambientUniform >= 0 {
+		f.w.gl.Uniform1f(ambientUniform, ambient)
+	}
 	f.w.gl.BindVertexArray(m.vao)
 	f.w.gl.DrawElements(glpkg.Triangles, m.indexCount, glpkg.UnsignedInt, 0)
 

@@ -3,9 +3,10 @@ package gowin
 import (
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/gif"
 	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"io"
 
 	"github.com/tinyrange/gowin/graphics"
@@ -15,19 +16,31 @@ type Texture2D struct {
 	g graphics.Texture
 }
 
-func LoadTexture(ctx *Context, r io.Reader) (Texture2D, error) {
-	if ctx == nil || ctx.win == nil {
+func LoadImage(r io.Reader) (image.Image, error) {
+	img, _, err := image.Decode(r)
+	return img, err
+}
+
+func (c *Context) NewTexture(img image.Image) (Texture2D, error) {
+	if c == nil || c.win == nil {
 		return Texture2D{}, fmt.Errorf("nil context")
 	}
-	img, _, err := image.Decode(r)
-	if err != nil {
-		return Texture2D{}, err
-	}
-	tex, err := ctx.win.NewTexture(img)
+	tex, err := c.win.NewTexture(img)
 	if err != nil {
 		return Texture2D{}, err
 	}
 	return Texture2D{g: tex}, nil
+}
+
+func LoadTexture(ctx *Context, r io.Reader) (Texture2D, error) {
+	if ctx == nil || ctx.win == nil {
+		return Texture2D{}, fmt.Errorf("nil context")
+	}
+	img, err := LoadImage(r)
+	if err != nil {
+		return Texture2D{}, err
+	}
+	return ctx.NewTexture(img)
 }
 
 func (t Texture2D) Size() (int, int) {
@@ -46,9 +59,8 @@ const (
 )
 
 type Shader struct {
-	kind     ShaderKind
-	vertex   string
-	fragment string
+	kind ShaderKind
+	g3d  graphics.Shader3D
 }
 
 type ShaderSources struct {
@@ -65,7 +77,7 @@ func DefaultShader3D() Shader {
 }
 
 func LoadShader(ctx *Context, src ShaderSources) (Shader, error) {
-	if ctx == nil {
+	if ctx == nil || ctx.win == nil {
 		return Shader{}, fmt.Errorf("nil context")
 	}
 	if src.Vertex == nil || src.Fragment == nil {
@@ -79,16 +91,18 @@ func LoadShader(ctx *Context, src ShaderSources) (Shader, error) {
 	if err != nil {
 		return Shader{}, err
 	}
-	// Root-level shader resources are intentionally part of the public shape now.
-	// Custom shader compilation will be wired into the graphics backend next.
-	return Shader{kind: ShaderCustom, vertex: string(vertex), fragment: string(fragment)}, nil
+	shader, err := ctx.win.NewShader3D(string(vertex), string(fragment))
+	if err != nil {
+		return Shader{}, err
+	}
+	return Shader{kind: ShaderCustom, g3d: shader}, nil
 }
 
 type Vertex3D struct {
 	Position Vec3
 	Normal   Vec3
 	UV       Vec2
-	Color    Color
+	Color    color.Color
 }
 
 type MeshData struct {
@@ -132,14 +146,15 @@ func (m *Mesh) SetData(data MeshData) error {
 	verts := make([]graphics.Vertex3D, len(data.Vertices))
 	for i, v := range data.Vertices {
 		c := v.Color
-		if c == (Color{}) {
+		if c == nil {
 			c = White
 		}
+		r, g, b, a := c.RGBA()
 		verts[i] = graphics.Vertex3D{
 			X: v.Position.X, Y: v.Position.Y, Z: v.Position.Z,
 			NX: v.Normal.X, NY: v.Normal.Y, NZ: v.Normal.Z,
 			U: v.UV.X, V: v.UV.Y,
-			R: c.R, G: c.G, B: c.B, A: c.A,
+			R: float32(r) / 0xffff, G: float32(g) / 0xffff, B: float32(b) / 0xffff, A: float32(a) / 0xffff,
 		}
 	}
 	g, err := m.ctx.win.NewMesh3D(verts, data.Indices)
@@ -152,4 +167,29 @@ func (m *Mesh) SetData(data MeshData) error {
 	m.data = data
 	m.g3d = g
 	return nil
+}
+
+func (m *Mesh) Destroy() {
+	if m == nil || m.g3d == nil {
+		return
+	}
+	m.g3d.Destroy()
+	m.g3d = nil
+}
+
+func (s Shader) Destroy() {
+	if s.g3d != nil {
+		s.g3d.Destroy()
+	}
+}
+
+func (c *Context) WriteScreenshotPNG(w io.Writer) error {
+	if c == nil || c.frame == nil {
+		return fmt.Errorf("no active frame")
+	}
+	img, err := c.frame.ScreenshotLogical()
+	if err != nil {
+		return err
+	}
+	return png.Encode(w, img)
 }

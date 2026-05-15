@@ -122,6 +122,13 @@ type Window interface {
 	// a conventional right-handed coordinate system; vertex winding is
 	// counter-clockwise when viewed from the front face.
 	NewMesh3D(vertices []Vertex3D, indices []uint32) (Mesh3D, error)
+	// NewShader3D compiles a shader program that can draw Mesh3D resources.
+	//
+	// Custom 3D shaders use the same vertex layout as Mesh3D:
+	// a_position vec3, a_normal vec3, a_texCoord vec2, and a_color vec4.
+	// They may declare u_model, u_view, u_projection, u_lightDirection, and
+	// u_ambient uniforms to receive values from Draw3DOptions.
+	NewShader3D(vertexSource, fragmentSource string) (Shader3D, error)
 
 	SetClear(enabled bool)
 	SetClearColor(color color.Color)

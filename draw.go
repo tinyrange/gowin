@@ -117,6 +117,7 @@ func (c *Context) Draw(cmd *DrawCommand) {
 		Model:          model,
 		View:           view,
 		Projection:     proj,
+		Shader:         cmd.shader.g3d,
 		Ambient:        ambient,
 		LightDirection: light,
 	})
@@ -126,28 +127,28 @@ func (c *Context) DrawTexture(tex Texture2D, dst Rect) {
 	if c == nil || c.frame == nil {
 		return
 	}
-	c.frame.RenderQuad(dst.X, dst.Y, dst.Width, dst.Height, tex.g, White)
+	c.frame.RenderQuad(dst.X, dst.Y, dst.Width, dst.Height, tex.g, color.White)
 }
 
-func (c *Context) DrawRectangle(rect Rect, col Color) {
+func (c *Context) DrawRectangle(rect Rect, col color.Color) {
 	if c == nil || c.frame == nil {
 		return
 	}
 	c.frame.RenderQuad(rect.X, rect.Y, rect.Width, rect.Height, nil, col)
 }
 
-func (c *Context) DrawText(s string, x, y, size float32, col Color) float32 {
+func (c *Context) DrawText(s string, x, y, size float32, col color.Color) float32 {
 	if c == nil || c.text == nil {
 		return x
 	}
 	return c.text.RenderText(s, x, y, float64(size), col)
 }
 
-func (c *Context) DrawCube(pos, size Vec3, col Color) {
+func (c *Context) DrawCube(pos, size Vec3, col color.Color) {
 	if c == nil {
 		return
 	}
-	verts, idx := graphics.Cuboid3DGeometry(size.X, size.Y, size.Z, color.Color(col))
+	verts, idx := graphics.Cuboid3DGeometry(size.X, size.Y, size.Z, col)
 	mesh := c.NewMesh()
 	data := MeshData{
 		Vertices: make([]Vertex3D, len(verts)),
@@ -158,7 +159,12 @@ func (c *Context) DrawCube(pos, size Vec3, col Color) {
 			Position: Vec3{X: v.X, Y: v.Y, Z: v.Z},
 			Normal:   Vec3{X: v.NX, Y: v.NY, Z: v.NZ},
 			UV:       Vec2{X: v.U, Y: v.V},
-			Color:    Color{R: v.R, G: v.G, B: v.B, A: v.A},
+			Color: color.NRGBA{
+				R: uint8(v.R * 255),
+				G: uint8(v.G * 255),
+				B: uint8(v.B * 255),
+				A: uint8(v.A * 255),
+			},
 		}
 	}
 	if err := mesh.SetData(data); err != nil {

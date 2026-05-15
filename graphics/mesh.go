@@ -87,6 +87,13 @@ type Mesh3D interface {
 	Destroy()
 }
 
+// Shader3D is an opaque shader resource created by Window.NewShader3D.
+type Shader3D interface {
+	isShader3D()
+	// Destroy releases the shader program. Destroy is idempotent.
+	Destroy()
+}
+
 type Draw3DOptions struct {
 	// Model places the mesh in world space. Zero value means identity.
 	Model Mat4
@@ -95,6 +102,9 @@ type Draw3DOptions struct {
 	// Projection maps camera coordinates to clip space. Use PerspectiveMat4 or
 	// Ortho3DMat4 for the common cases.
 	Projection Mat4
+	// Shader overrides the built-in lit vertex-color shader. Custom shaders must
+	// use the Mesh3D vertex layout documented on Window.NewShader3D.
+	Shader Shader3D
 	// Ambient controls minimum light contribution. Zero uses a small default.
 	Ambient float32
 	// LightDirection points from the surface toward the directional light.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"image/color"
 	"math"
 
 	"github.com/tinyrange/gowin"
@@ -26,7 +27,7 @@ func (d *demo) Init(ctx *gowin.Context) error {
 	}
 
 	mesh := ctx.NewMesh(gowin.MeshOptions{Usage: gowin.StaticMesh})
-	if err := mesh.SetData(cubeMeshData(gowin.Color{R: 0.3, G: 0.55, B: 1, A: 1})); err != nil {
+	if err := mesh.SetData(cubeMeshData(color.NRGBA{R: 77, G: 140, B: 255, A: 255})); err != nil {
 		return err
 	}
 	d.mesh = mesh
@@ -66,7 +67,7 @@ func (d *demo) Update(ctx *gowin.Context, dt float32) error {
 func (d *demo) Draw(ctx *gowin.Context) error {
 	ctx.Begin3D(d.camera)
 	d.draw.SetUniform("u_Ambient", float32(0.25+0.15*math.Sin(float64(d.angle))))
-	d.scene.Draw(ctx)
+	ctx.DrawScene(d.scene)
 	ctx.End3D()
 
 	ctx.DrawText("gowin draw commands", 18, 28, 18, gowin.White)
@@ -78,14 +79,14 @@ func main() {
 		Title:      "gowin draw commands",
 		Width:      900,
 		Height:     600,
-		ClearColor: gowin.Color{R: 0.07, G: 0.08, B: 0.1, A: 1},
+		ClearColor: color.NRGBA{R: 18, G: 20, B: 26, A: 255},
 	})
 	if err != nil && !errors.Is(err, errDone) {
 		panic(err)
 	}
 }
 
-func cubeMeshData(c gowin.Color) gowin.MeshData {
+func cubeMeshData(c color.Color) gowin.MeshData {
 	p := []gowin.Vec3{
 		{X: -0.5, Y: -0.5, Z: 0.5},
 		{X: 0.5, Y: -0.5, Z: 0.5},

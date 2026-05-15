@@ -40,6 +40,13 @@ func (s *Scene) Draw(ctx *Context) {
 	}
 }
 
+func (c *Context) DrawScene(scene *Scene) {
+	if scene == nil {
+		return
+	}
+	scene.Draw(c)
+}
+
 func drawNode(ctx *Context, n *Node, parent Mat4) {
 	if n == nil {
 		return

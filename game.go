@@ -1,6 +1,7 @@
 package gowin
 
 import (
+	"image/color"
 	"time"
 
 	"github.com/tinyrange/gowin/graphics"
@@ -12,7 +13,7 @@ type Config struct {
 	Title      string
 	Width      int
 	Height     int
-	ClearColor Color
+	ClearColor color.Color
 }
 
 type Game interface {
@@ -54,7 +55,7 @@ func Run(game Game, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if cfg.ClearColor != (Color{}) {
+	if cfg.ClearColor != nil {
 		win.SetClearColor(cfg.ClearColor)
 	}
 
@@ -142,10 +143,14 @@ type Key = window.Key
 type MouseButton = window.Button
 
 const (
+	KeyQ      = window.KeyQ
 	KeyW      = window.KeyW
+	KeyE      = window.KeyE
+	KeyR      = window.KeyR
 	KeyA      = window.KeyA
 	KeyS      = window.KeyS
 	KeyD      = window.KeyD
+	KeyF      = window.KeyF
 	KeySpace  = window.KeySpace
 	KeyEscape = window.KeyEscape
 
