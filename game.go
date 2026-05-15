@@ -205,6 +205,9 @@ const (
 	KeyD      = window.KeyD
 	KeyF      = window.KeyF
 	KeySpace  = window.KeySpace
+	KeyCtrl   = window.KeyLeftControl
+	KeyLCtrl  = window.KeyLeftControl
+	KeyRCtrl  = window.KeyRightControl
 	KeyShift  = window.KeyLeftShift
 	KeyLShift = window.KeyLeftShift
 	KeyRShift = window.KeyRightShift

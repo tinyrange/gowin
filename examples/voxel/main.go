@@ -110,11 +110,13 @@ type demo struct {
 	totalMeshNanos  int64
 	uploadBudget    int
 
-	player   gowin.Vec3 // feet position
-	vel      gowin.Vec3
-	yaw      float32
-	pitch    float32
-	onGround bool
+	player       gowin.Vec3 // feet position
+	vel          gowin.Vec3
+	yaw          float32
+	pitch        float32
+	onGround     bool
+	flying       bool
+	lastSpaceTap float32
 
 	selection     *rayHit
 	selectionMesh *gowin.Mesh
@@ -217,6 +219,21 @@ func (d *demo) Update(ctx *gowin.Context, dt float32) error {
 }
 
 func (d *demo) updatePhysics(ctx *gowin.Context, dt float32) error {
+	if ctx.IsKeyPressed(gowin.KeySpace) {
+		now := ctx.Time().Elapsed
+		if now-d.lastSpaceTap < 0.32 {
+			d.flying = !d.flying
+			d.vel = gowin.Vec3{}
+			d.onGround = false
+			d.lastSpaceTap = 0
+		} else {
+			d.lastSpaceTap = now
+		}
+	}
+	if d.flying {
+		return d.updateFlight(ctx, dt)
+	}
+
 	forward := gowin.Vec3{X: float32(math.Sin(float64(d.yaw))), Z: float32(-math.Cos(float64(d.yaw)))}
 	right := gowin.Vec3{X: -forward.Z, Z: forward.X}
 	wish := gowin.Vec3{}
@@ -254,6 +271,38 @@ func (d *demo) updatePhysics(ctx *gowin.Context, dt float32) error {
 		d.player = findSpawnPoint()
 		d.vel = gowin.Vec3{}
 	}
+	return nil
+}
+
+func (d *demo) updateFlight(ctx *gowin.Context, dt float32) error {
+	look := d.lookDirection()
+	forward := gowin.Vec3{X: look.X, Z: look.Z}.Normalize()
+	right := gowin.Vec3{X: -forward.Z, Z: forward.X}
+	wish := gowin.Vec3{}
+	if ctx.IsKeyDown(gowin.KeyW) {
+		wish = wish.Add(forward)
+	}
+	if ctx.IsKeyDown(gowin.KeyS) {
+		wish = wish.Sub(forward)
+	}
+	if ctx.IsKeyDown(gowin.KeyD) {
+		wish = wish.Add(right)
+	}
+	if ctx.IsKeyDown(gowin.KeyA) {
+		wish = wish.Sub(right)
+	}
+	if ctx.IsKeyDown(gowin.KeySpace) {
+		wish.Y += 1
+	}
+	if ctx.IsKeyDown(gowin.KeyCtrl) || ctx.IsKeyDown(gowin.KeyRCtrl) {
+		wish.Y -= 1
+	}
+	speed := sprintSpeed
+	if ctx.IsKeyDown(gowin.KeyShift) || ctx.IsKeyDown(gowin.KeyRShift) {
+		speed = sprintSpeed * 2.2
+	}
+	d.player = d.player.Add(wish.Normalize().MulScalar(speed * dt))
+	d.vel = gowin.Vec3{}
 	return nil
 }
 
@@ -323,8 +372,13 @@ func (d *demo) Draw(ctx *gowin.Context) error {
 	}
 	ctx.End3D()
 
-	ctx.DrawText("WASD move  Shift sprint  Space jump  mouse look  LMB delete  RMB place  Esc release", 16, 26, 16, color.White)
+	mode := "walk"
+	if d.flying {
+		mode = "fly"
+	}
+	ctx.DrawText("WASD move  double-tap Space fly  Space/Ctrl up/down  Shift sprint  LMB/RMB edit  Esc release", 16, 26, 16, color.White)
 	ctx.DrawText(fmt.Sprintf("draws: %d/%d  chunks: %d +%d  verts: %d/%d  gen: %.2fms mesh: %.2fms", d.visibleChunks, d.drawBudget, len(d.chunks), d.pendingCount, d.visibleVertices, d.vertexBudget, d.averageGenMillis(), d.averageMeshMillis()), 16, 50, 14, color.NRGBA{R: 212, G: 226, B: 235, A: 255})
+	ctx.DrawText("mode: "+mode, 16, 72, 14, color.NRGBA{R: 232, G: 230, B: 154, A: 255})
 	return nil
 }
 
