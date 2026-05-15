@@ -479,9 +479,9 @@ type chunkCandidate struct {
 
 func lodForDistance(dist int) int {
 	switch {
-	case dist <= 2:
+	case dist <= 5:
 		return 0
-	case dist <= 4:
+	case dist <= 8:
 		return 1
 	default:
 		return 2
@@ -785,20 +785,31 @@ func floatingIslandDensity(b worldBlock) float64 {
 	if b.Y < 24 || b.Y > 168 {
 		return -1
 	}
+	best := -2.0
 	cellX := floorDiv(b.X, 160)
 	cellZ := floorDiv(b.Z, 160)
-	cx, cy, cz, rx, ry, rz := islandParams(cellX, cellZ)
-	nx := (float64(b.X) - cx) / rx
-	ny := (float64(b.Y) - cy) / ry
-	nz := (float64(b.Z) - cz) / rz
-	shell := 1 - (nx*nx + nz*nz + math.Abs(ny)*ny*1.32)
-	warp := perlinFBM((float64(b.X)-cx)*0.025, (float64(b.Y)-cy)*0.033, (float64(b.Z)-cz)*0.025, 3) * 0.58
-	carve := perlinFBM(float64(b.X)*0.052+31, float64(b.Y)*0.052-17, float64(b.Z)*0.052+9, 2)
-	density := shell + warp
-	if carve > 0.48 && density < 0.52 {
-		density -= 0.72
+	for dz := -1; dz <= 1; dz++ {
+		for dx := -1; dx <= 1; dx++ {
+			cx, cy, cz, rx, ry, rz := islandParams(cellX+dx, cellZ+dz)
+			if math.Abs(float64(b.X)-cx) > rx*1.45 || math.Abs(float64(b.Z)-cz) > rz*1.45 || math.Abs(float64(b.Y)-cy) > ry*1.75 {
+				continue
+			}
+			nx := (float64(b.X) - cx) / rx
+			ny := (float64(b.Y) - cy) / ry
+			nz := (float64(b.Z) - cz) / rz
+			shell := 1 - (nx*nx + nz*nz + math.Abs(ny)*ny*1.32)
+			warp := perlinFBM((float64(b.X)-cx)*0.025, (float64(b.Y)-cy)*0.033, (float64(b.Z)-cz)*0.025, 3) * 0.58
+			carve := perlinFBM(float64(b.X)*0.052+31, float64(b.Y)*0.052-17, float64(b.Z)*0.052+9, 2)
+			density := shell + warp
+			if carve > 0.48 && density < 0.52 {
+				density -= 0.72
+			}
+			if density > best {
+				best = density
+			}
+		}
 	}
-	return density
+	return best
 }
 
 func islandParams(cellX, cellZ int) (cx, cy, cz, rx, ry, rz float64) {
@@ -1009,10 +1020,10 @@ var cubeFaces = []cubeFace{
 
 func main() {
 	frames := flag.Int("frames", 0, "exit after this many frames; 0 runs interactively")
-	view := flag.Int("view", 6, "maximum chunk radius to consider")
-	vertical := flag.Int("vertical", 4, "vertical chunk radius to consider")
-	drawBudget := flag.Int("draw-budget", 320, "maximum visible chunk draw commands")
-	vertexBudget := flag.Int("vertex-budget", 650000, "maximum visible mesh vertices")
+	view := flag.Int("view", 9, "maximum chunk radius to consider")
+	vertical := flag.Int("vertical", 5, "vertical chunk radius to consider")
+	drawBudget := flag.Int("draw-budget", 520, "maximum visible chunk draw commands")
+	vertexBudget := flag.Int("vertex-budget", 1200000, "maximum visible mesh vertices")
 	flag.Parse()
 	err := gowin.Run(&demo{
 		maxFrames:      *frames,
