@@ -556,7 +556,6 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 	if d.uploadBudget == 0 {
 		d.uploadBudget = 10
 	}
-	needed := map[chunkKey]bool{}
 	candidates := d.chunkCandidates(center)
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].score != candidates[j].score {
@@ -564,6 +563,10 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		}
 		return candidates[i].key.Y < candidates[j].key.Y
 	})
+	retained := make(map[chunkKey]bool, len(candidates))
+	for _, candidate := range candidates {
+		retained[candidate.key] = true
+	}
 	d.visibleVertices = 0
 	draws := 0
 	enqueued := 0
@@ -572,7 +575,6 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 			break
 		}
 		key := candidate.key
-		needed[key] = true
 		c := d.chunks[key]
 		if c == nil {
 			if enqueued < maxEnqueuePerFrame && d.enqueueChunk(candidate) {
@@ -602,7 +604,7 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 	}
 	d.visibleChunks = draws
 	for key, c := range d.chunks {
-		if needed[key] {
+		if retained[key] {
 			continue
 		}
 		if c.mesh != nil {
@@ -614,7 +616,7 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		delete(d.chunks, key)
 	}
 	for key := range d.pending {
-		if !needed[key] {
+		if !retained[key] {
 			delete(d.pending, key)
 		}
 	}
@@ -784,6 +786,15 @@ func (d *demo) blockAt(b worldBlock) blockKind {
 	return c.blockLocal(local)
 }
 
+func (d *demo) meshBlockAt(b worldBlock) blockKind {
+	key, local := worldToLocal(b)
+	c := d.chunks[key]
+	if c == nil {
+		return generatedBlock(b)
+	}
+	return c.blockLocal(local)
+}
+
 func (d *demo) setBlock(ctx *gowin.Context, b worldBlock, kind blockKind) {
 	key, local := worldToLocal(b)
 	c := d.chunks[key]
@@ -921,6 +932,7 @@ func (d *demo) buildChunkMesh(c *chunk) gowin.MeshData {
 					base := uint32(len(vertices))
 					col := blockFaceColor(kind, face.normal, world)
 					for _, p := range face.points {
+						shaded := shadeColor(col, d.vertexAO(world, face.normal, p, step))
 						vertices = append(vertices, gowin.Vertex3D{
 							Position: gowin.Vec3{
 								X: float32(b.X) + p.X*float32(step),
@@ -929,7 +941,7 @@ func (d *demo) buildChunkMesh(c *chunk) gowin.MeshData {
 							},
 							Normal: face.normal,
 							UV:     p.UV,
-							Color:  col,
+							Color:  shaded,
 						})
 					}
 					indices = append(indices, base, base+1, base+2, base, base+2, base+3)
@@ -963,13 +975,88 @@ func (d *demo) solidVolume(start worldBlock, step int) bool {
 	for z := 0; z < step; z++ {
 		for y := 0; y < step; y++ {
 			for x := 0; x < step; x++ {
-				if d.blockAt(worldBlock{X: start.X + x, Y: start.Y + y, Z: start.Z + z}) != 0 {
+				if d.meshBlockAt(worldBlock{X: start.X + x, Y: start.Y + y, Z: start.Z + z}) != 0 {
 					return true
 				}
 			}
 		}
 	}
 	return false
+}
+
+func (d *demo) vertexAO(world worldBlock, normal gowin.Vec3, p facePoint, step int) float32 {
+	n := normalOffset(normal, step)
+	t1, t2 := tangentOffsets(normal, p, step)
+	side1 := d.meshBlockAt(addBlocks(world, addBlocks(n, t1))) != 0
+	side2 := d.meshBlockAt(addBlocks(world, addBlocks(n, t2))) != 0
+	corner := d.meshBlockAt(addBlocks(world, addBlocks(n, addBlocks(t1, t2)))) != 0
+	ao := 3
+	if side1 && side2 {
+		ao = 0
+	} else {
+		ao = 3 - boolInt(side1) - boolInt(side2) - boolInt(corner)
+	}
+	return 0.58 + float32(ao)*0.14
+}
+
+func normalOffset(n gowin.Vec3, step int) worldBlock {
+	if n.X > 0 {
+		return worldBlock{X: step}
+	}
+	if n.X < 0 {
+		return worldBlock{X: -1}
+	}
+	if n.Y > 0 {
+		return worldBlock{Y: step}
+	}
+	if n.Y < 0 {
+		return worldBlock{Y: -1}
+	}
+	if n.Z > 0 {
+		return worldBlock{Z: step}
+	}
+	return worldBlock{Z: -1}
+}
+
+func tangentOffsets(n gowin.Vec3, p facePoint, step int) (worldBlock, worldBlock) {
+	x := axisOffset(p.X, step)
+	y := axisOffset(p.Y, step)
+	z := axisOffset(p.Z, step)
+	if n.X != 0 {
+		return worldBlock{Y: y}, worldBlock{Z: z}
+	}
+	if n.Y != 0 {
+		return worldBlock{X: x}, worldBlock{Z: z}
+	}
+	return worldBlock{X: x}, worldBlock{Y: y}
+}
+
+func axisOffset(v float32, step int) int {
+	if v > 0 {
+		return step
+	}
+	return -1
+}
+
+func addBlocks(a, b worldBlock) worldBlock {
+	return worldBlock{X: a.X + b.X, Y: a.Y + b.Y, Z: a.Z + b.Z}
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func shadeColor(c color.Color, shade float32) color.Color {
+	r, g, b, a := c.RGBA()
+	return color.NRGBA{
+		R: uint8(clampInt(int(float32(r>>8)*shade), 0, 255)),
+		G: uint8(clampInt(int(float32(g>>8)*shade), 0, 255)),
+		B: uint8(clampInt(int(float32(b>>8)*shade), 0, 255)),
+		A: uint8(a >> 8),
+	}
 }
 
 func outlineMeshData(b worldBlock) gowin.MeshData {
