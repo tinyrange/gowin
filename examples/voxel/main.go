@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"sort"
 
 	"github.com/tinyrange/gowin"
 )
@@ -13,17 +14,15 @@ import (
 var errDone = errors.New("voxel demo complete")
 
 const (
-	chunkSize      = 16
-	viewRadius     = 3
-	verticalRadius = 2
-	playerRadius   = float32(0.32)
-	playerHeight   = float32(1.78)
-	eyeHeight      = float32(1.58)
-	gravity        = float32(24)
-	jumpSpeed      = float32(8.2)
-	walkSpeed      = float32(5.2)
-	sprintSpeed    = float32(8.4)
-	reach          = float32(7)
+	chunkSize    = 16
+	playerRadius = float32(0.32)
+	playerHeight = float32(1.78)
+	eyeHeight    = float32(1.58)
+	gravity      = float32(24)
+	jumpSpeed    = float32(8.2)
+	walkSpeed    = float32(5.2)
+	sprintSpeed  = float32(8.4)
+	reach        = float32(7)
 )
 
 type chunkKey struct {
@@ -52,12 +51,14 @@ const (
 )
 
 type chunk struct {
-	key    chunkKey
-	blocks map[blockKey]blockKind
-	mesh   *gowin.Mesh
-	draw   *gowin.DrawCommand
-	node   *gowin.Node
-	dirty  bool
+	key         chunkKey
+	blocks      [chunkSize * chunkSize * chunkSize]blockKind
+	mesh        *gowin.Mesh
+	draw        *gowin.DrawCommand
+	node        *gowin.Node
+	dirty       bool
+	lod         int
+	vertexCount int
 }
 
 type rayHit struct {
@@ -73,9 +74,14 @@ type worldBlock struct {
 }
 
 type demo struct {
-	maxFrames int
-	scene     *gowin.Scene
-	chunks    map[chunkKey]*chunk
+	maxFrames       int
+	viewRadius      int
+	verticalRadius  int
+	drawBudget      int
+	vertexBudget    int
+	scene           *gowin.Scene
+	chunks          map[chunkKey]*chunk
+	visibleVertices int
 
 	player   gowin.Vec3 // feet position
 	vel      gowin.Vec3
@@ -250,7 +256,7 @@ func (d *demo) Draw(ctx *gowin.Context) error {
 	ctx.End3D()
 
 	ctx.DrawText("WASD move  Shift sprint  Space jump  mouse look  LMB delete  RMB place  Esc release", 16, 26, 16, color.White)
-	ctx.DrawText(fmt.Sprintf("chunks: %d  pos: %.1f %.1f %.1f", len(d.chunks), d.player.X, d.player.Y, d.player.Z), 16, 50, 14, color.NRGBA{R: 212, G: 226, B: 235, A: 255})
+	ctx.DrawText(fmt.Sprintf("chunks: %d  verts: %d/%d  pos: %.1f %.1f %.1f", len(d.chunks), d.visibleVertices, d.vertexBudget, d.player.X, d.player.Y, d.player.Z), 16, 50, 14, color.NRGBA{R: 212, G: 226, B: 235, A: 255})
 	return nil
 }
 
@@ -360,23 +366,74 @@ func blockIntersectsPlayer(block worldBlock, player gowin.Vec3) bool {
 
 func (d *demo) streamChunks(ctx *gowin.Context) error {
 	center := worldChunk(d.player.X, d.player.Y, d.player.Z)
+	if d.viewRadius == 0 {
+		d.viewRadius = 5
+	}
+	if d.verticalRadius == 0 {
+		d.verticalRadius = 3
+	}
+	if d.drawBudget == 0 {
+		d.drawBudget = 260
+	}
+	if d.vertexBudget == 0 {
+		d.vertexBudget = 450000
+	}
 	needed := map[chunkKey]bool{}
-	for dy := -verticalRadius; dy <= verticalRadius; dy++ {
-		for dz := -viewRadius; dz <= viewRadius; dz++ {
-			for dx := -viewRadius; dx <= viewRadius; dx++ {
-				key := chunkKey{X: center.X + dx, Y: center.Y + dy, Z: center.Z + dz}
-				needed[key] = true
-				if _, ok := d.chunks[key]; ok {
+	candidates := make([]chunkCandidate, 0, (d.viewRadius*2+1)*(d.viewRadius*2+1)*(d.verticalRadius*2+1))
+	for dy := -d.verticalRadius; dy <= d.verticalRadius; dy++ {
+		for dz := -d.viewRadius; dz <= d.viewRadius; dz++ {
+			for dx := -d.viewRadius; dx <= d.viewRadius; dx++ {
+				dist := max(abs(dx), max(abs(dy), abs(dz)))
+				if dist > d.viewRadius {
 					continue
 				}
-				c := d.newChunk(key)
-				d.chunks[key] = c
-				d.markChunkDirty(key)
-				for _, n := range allNeighborKeys(key) {
-					d.markChunkDirty(n)
-				}
+				key := chunkKey{X: center.X + dx, Y: center.Y + dy, Z: center.Z + dz}
+				candidates = append(candidates, chunkCandidate{key: key, dist: dist, lod: lodForDistance(dist)})
 			}
 		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].dist != candidates[j].dist {
+			return candidates[i].dist < candidates[j].dist
+		}
+		return candidates[i].key.Y < candidates[j].key.Y
+	})
+	d.visibleVertices = 0
+	draws := 0
+	for _, candidate := range candidates {
+		if draws >= d.drawBudget || d.visibleVertices >= d.vertexBudget {
+			break
+		}
+		key := candidate.key
+		needed[key] = true
+		c := d.chunks[key]
+		if c == nil {
+			c = d.newChunk(key)
+			d.chunks[key] = c
+			d.markChunkDirty(key)
+			for _, n := range allNeighborKeys(key) {
+				d.markChunkDirty(n)
+			}
+		}
+		if c.lod != candidate.lod {
+			c.lod = candidate.lod
+			c.dirty = true
+		}
+		if c.dirty {
+			if err := d.rebuildChunk(ctx, c); err != nil {
+				return err
+			}
+		}
+		if c.draw == nil {
+			continue
+		}
+		if d.visibleVertices+c.vertexCount > d.vertexBudget && draws > 0 {
+			c.node.SetDraw(nil)
+			continue
+		}
+		c.node.SetDraw(c.draw)
+		d.visibleVertices += c.vertexCount
+		draws++
 	}
 	for key, c := range d.chunks {
 		if needed[key] {
@@ -390,19 +447,28 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		}
 		delete(d.chunks, key)
 	}
-	for key, c := range d.chunks {
-		if !needed[key] || !c.dirty {
-			continue
-		}
-		if err := d.rebuildChunk(ctx, c); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
+type chunkCandidate struct {
+	key  chunkKey
+	dist int
+	lod  int
+}
+
+func lodForDistance(dist int) int {
+	switch {
+	case dist <= 2:
+		return 0
+	case dist <= 4:
+		return 1
+	default:
+		return 2
+	}
+}
+
 func (d *demo) newChunk(key chunkKey) *chunk {
-	c := &chunk{key: key, blocks: map[blockKey]blockKind{}, dirty: true}
+	c := &chunk{key: key, dirty: true}
 	for z := 0; z < chunkSize; z++ {
 		for x := 0; x < chunkSize; x++ {
 			wx := key.X*chunkSize + x
@@ -415,7 +481,7 @@ func (d *demo) newChunk(key chunkKey) *chunk {
 					Z: wz,
 				}
 				if kind := generatedTerrainBlock(world, h); kind != 0 {
-					c.blocks[blockKey{X: x, Y: y, Z: z}] = kind
+					c.setLocal(blockKey{X: x, Y: y, Z: z}, kind)
 				}
 			}
 			if shouldGrowTree(wx, wz, h) {
@@ -428,13 +494,25 @@ func (d *demo) newChunk(key chunkKey) *chunk {
 	return c
 }
 
+func (c *chunk) blockLocal(b blockKey) blockKind {
+	return c.blocks[localIndex(b)]
+}
+
+func (c *chunk) setLocal(b blockKey, kind blockKind) {
+	c.blocks[localIndex(b)] = kind
+}
+
+func localIndex(b blockKey) int {
+	return (b.Y*chunkSize+b.Z)*chunkSize + b.X
+}
+
 func (d *demo) blockAt(b worldBlock) blockKind {
 	key, local := worldToLocal(b)
 	c := d.chunks[key]
 	if c == nil {
 		return 0
 	}
-	return c.blocks[local]
+	return c.blockLocal(local)
 }
 
 func (d *demo) setBlock(ctx *gowin.Context, b worldBlock, kind blockKind) {
@@ -444,9 +522,9 @@ func (d *demo) setBlock(ctx *gowin.Context, b worldBlock, kind blockKind) {
 		return
 	}
 	if kind == 0 {
-		delete(c.blocks, local)
+		c.setLocal(local, 0)
 	} else {
-		c.blocks[local] = kind
+		c.setLocal(local, kind)
 	}
 	c.dirty = true
 	for _, n := range boundaryNeighborKeys(key, local) {
@@ -509,6 +587,7 @@ func (d *demo) rebuildChunk(ctx *gowin.Context, c *chunk) error {
 			c.mesh.Destroy()
 			c.mesh = nil
 		}
+		c.vertexCount = 0
 		c.draw = nil
 		c.dirty = false
 		if c.node != nil {
@@ -536,6 +615,7 @@ func (d *demo) rebuildChunk(ctx *gowin.Context, c *chunk) error {
 	}
 	c.mesh = mesh
 	c.draw = draw
+	c.vertexCount = len(data.Vertices)
 	c.dirty = false
 	if c.node != nil {
 		c.node.SetDraw(draw)
@@ -544,33 +624,75 @@ func (d *demo) rebuildChunk(ctx *gowin.Context, c *chunk) error {
 }
 
 func (d *demo) buildChunkMesh(c *chunk) gowin.MeshData {
-	vertices := make([]gowin.Vertex3D, 0, len(c.blocks)*8)
-	indices := make([]uint32, 0, len(c.blocks)*12)
-	for b, kind := range c.blocks {
-		world := worldBlock{X: c.key.X*chunkSize + b.X, Y: c.key.Y*chunkSize + b.Y, Z: c.key.Z*chunkSize + b.Z}
-		for _, face := range cubeFaces {
-			n := worldBlock{X: world.X + int(face.normal.X), Y: world.Y + int(face.normal.Y), Z: world.Z + int(face.normal.Z)}
-			if d.blockAt(n) != 0 {
-				continue
+	vertices := make([]gowin.Vertex3D, 0, chunkSize*chunkSize*8)
+	indices := make([]uint32, 0, chunkSize*chunkSize*12)
+	step := 1 << c.lod
+	for z := 0; z < chunkSize; z += step {
+		for y := 0; y < chunkSize; y += step {
+			for x := 0; x < chunkSize; x += step {
+				b := blockKey{X: x, Y: y, Z: z}
+				kind := c.sampleLOD(b, step)
+				if kind == 0 {
+					continue
+				}
+				world := worldBlock{X: c.key.X*chunkSize + b.X, Y: c.key.Y*chunkSize + b.Y, Z: c.key.Z*chunkSize + b.Z}
+				for _, face := range cubeFaces {
+					n := worldBlock{X: world.X + int(face.normal.X)*step, Y: world.Y + int(face.normal.Y)*step, Z: world.Z + int(face.normal.Z)*step}
+					if d.solidVolume(n, step) {
+						continue
+					}
+					base := uint32(len(vertices))
+					col := blockFaceColor(kind, face.normal, world)
+					for _, p := range face.points {
+						vertices = append(vertices, gowin.Vertex3D{
+							Position: gowin.Vec3{
+								X: float32(b.X) + p.X*float32(step),
+								Y: float32(b.Y) + p.Y*float32(step),
+								Z: float32(b.Z) + p.Z*float32(step),
+							},
+							Normal: face.normal,
+							UV:     p.UV,
+							Color:  col,
+						})
+					}
+					indices = append(indices, base, base+1, base+2, base, base+2, base+3)
+				}
 			}
-			base := uint32(len(vertices))
-			col := blockFaceColor(kind, face.normal, world)
-			for _, p := range face.points {
-				vertices = append(vertices, gowin.Vertex3D{
-					Position: gowin.Vec3{
-						X: float32(b.X) + p.X,
-						Y: float32(b.Y) + p.Y,
-						Z: float32(b.Z) + p.Z,
-					},
-					Normal: face.normal,
-					UV:     p.UV,
-					Color:  col,
-				})
-			}
-			indices = append(indices, base, base+1, base+2, base, base+2, base+3)
 		}
 	}
 	return gowin.MeshData{Vertices: vertices, Indices: indices}
+}
+
+func (c *chunk) sampleLOD(start blockKey, step int) blockKind {
+	var fallback blockKind
+	for z := 0; z < step; z++ {
+		for y := 0; y < step; y++ {
+			for x := 0; x < step; x++ {
+				kind := c.blockLocal(blockKey{X: start.X + x, Y: start.Y + y, Z: start.Z + z})
+				if kind == 0 {
+					continue
+				}
+				if kind == blockGrass || kind == blockSnow || kind == blockLeaves || kind == blockCrystal {
+					return kind
+				}
+				fallback = kind
+			}
+		}
+	}
+	return fallback
+}
+
+func (d *demo) solidVolume(start worldBlock, step int) bool {
+	for z := 0; z < step; z++ {
+		for y := 0; y < step; y++ {
+			for x := 0; x < step; x++ {
+				if d.blockAt(worldBlock{X: start.X + x, Y: start.Y + y, Z: start.Z + z}) != 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func outlineMeshData(b worldBlock) gowin.MeshData {
@@ -623,8 +745,8 @@ func generatedBlock(b worldBlock) blockKind {
 
 func generatedTerrainBlock(b worldBlock, h int) blockKind {
 	if b.Y > h {
-		if floatingIsland(b) {
-			return blockGrass
+		if kind := floatingIslandBlock(b); kind != 0 {
+			return kind
 		}
 		return 0
 	}
@@ -661,7 +783,7 @@ func stampTree(c *chunk, wx, h, wz int) {
 	for y := h + 1; y <= h+5; y++ {
 		ly := y - c.key.Y*chunkSize
 		if ly >= 0 && ly < chunkSize {
-			c.blocks[blockKey{X: baseX, Y: ly, Z: baseZ}] = blockWood
+			c.setLocal(blockKey{X: baseX, Y: ly, Z: baseZ}, blockWood)
 		}
 	}
 	for y := h + 4; y <= h+7; y++ {
@@ -677,7 +799,7 @@ func stampTree(c *chunk, wx, h, wz int) {
 					continue
 				}
 				if abs(dx)+abs(dz)+max(0, y-(h+5)) <= 4 {
-					c.blocks[blockKey{X: lx, Y: ly, Z: lz}] = blockLeaves
+					c.setLocal(blockKey{X: lx, Y: ly, Z: lz}, blockLeaves)
 				}
 			}
 		}
@@ -705,14 +827,61 @@ func crystalPocket(b worldBlock) bool {
 	return hash3(b.X, b.Y, b.Z)%29 == 0 && valueNoise3(b.X, b.Y, b.Z, 0.18) > 0.45
 }
 
-func floatingIsland(b worldBlock) bool {
-	if b.Y < 28 || b.Y > 52 {
-		return false
+func floatingIslandBlock(b worldBlock) blockKind {
+	density := floatingIslandDensity(b)
+	if density <= 0 {
+		return 0
 	}
-	cx := float64(positiveMod(b.X+128, 64) - 32)
-	cz := float64(positiveMod(b.Z-37, 64) - 32)
-	cy := float64(b.Y - (36 + int(valueNoise2(b.X, b.Z, 0.02)*8)))
-	return (cx*cx)/360+(cz*cz)/360+(cy*cy)/52 < 1 && valueNoise3(b.X, b.Y, b.Z, 0.22) > -0.15
+	above := worldBlock{X: b.X, Y: b.Y + 1, Z: b.Z}
+	if floatingIslandDensity(above) <= 0.04 {
+		if b.Y > 96 {
+			return blockSnow
+		}
+		return blockGrass
+	}
+	if density < 0.2 {
+		return blockDirt
+	}
+	if crystalPocket(b) {
+		return blockCrystal
+	}
+	return blockStone
+}
+
+func floatingIslandDensity(b worldBlock) float64 {
+	if b.Y < 34 || b.Y > 142 {
+		return -1
+	}
+	best := -2.0
+	cellX := floorDiv(b.X, 96)
+	cellZ := floorDiv(b.Z, 96)
+	for dz := -1; dz <= 1; dz++ {
+		for dx := -1; dx <= 1; dx++ {
+			cx, cy, cz, rx, ry, rz := islandParams(cellX+dx, cellZ+dz)
+			nx := (float64(b.X) - cx) / rx
+			ny := (float64(b.Y) - cy) / ry
+			nz := (float64(b.Z) - cz) / rz
+			shell := 1 - (nx*nx + nz*nz + math.Abs(ny)*ny*1.15)
+			warp := valueNoise3(b.X+int(cx), b.Y, b.Z+int(cz), 0.045)*0.32 +
+				valueNoise3(b.X, b.Y+91, b.Z, 0.11)*0.12
+			density := shell + warp
+			if density > best {
+				best = density
+			}
+		}
+	}
+	return best
+}
+
+func islandParams(cellX, cellZ int) (cx, cy, cz, rx, ry, rz float64) {
+	h := hash3(cellX, 97, cellZ)
+	cx = float64(cellX*96+48) + float64(int(h&31)-15)
+	cz = float64(cellZ*96+48) + float64(int((h>>5)&31)-15)
+	cy = 70 + float64(int((h>>10)&31)) + valueNoise2(cellX*19, cellZ*23, 0.7)*18
+	rx = 32 + float64((h>>15)&31)
+	rz = 30 + float64((h>>20)&31)
+	ry = 24 + float64((h>>25)&31)
+	return
 }
 
 func treeBlock(b worldBlock) blockKind {
@@ -883,8 +1052,18 @@ var cubeFaces = []cubeFace{
 
 func main() {
 	frames := flag.Int("frames", 0, "exit after this many frames; 0 runs interactively")
+	view := flag.Int("view", 6, "maximum chunk radius to consider")
+	vertical := flag.Int("vertical", 4, "vertical chunk radius to consider")
+	drawBudget := flag.Int("draw-budget", 320, "maximum visible chunk draw commands")
+	vertexBudget := flag.Int("vertex-budget", 650000, "maximum visible mesh vertices")
 	flag.Parse()
-	err := gowin.Run(&demo{maxFrames: *frames}, gowin.Config{
+	err := gowin.Run(&demo{
+		maxFrames:      *frames,
+		viewRadius:     *view,
+		verticalRadius: *vertical,
+		drawBudget:     *drawBudget,
+		vertexBudget:   *vertexBudget,
+	}, gowin.Config{
 		Title:      "gowin voxel demo",
 		Width:      1100,
 		Height:     720,

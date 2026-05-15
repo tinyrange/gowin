@@ -10,10 +10,20 @@ func BenchmarkChunkGeneration16(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		d := benchmarkDemo()
 		c := d.newChunk(chunkKey{X: i & 15, Y: 0, Z: (i >> 4) & 15})
-		if len(c.blocks) == 0 {
+		if countChunkBlocks(c) == 0 {
 			b.Fatal("generated empty chunk")
 		}
 	}
+}
+
+func countChunkBlocks(c *chunk) int {
+	var n int
+	for _, kind := range c.blocks {
+		if kind != 0 {
+			n++
+		}
+	}
+	return n
 }
 
 func BenchmarkChunkMesh16WithNeighbors(b *testing.B) {
@@ -37,9 +47,10 @@ func BenchmarkFarViewCPUStream(b *testing.B) {
 	const radius = 4
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		d := benchmarkWorld(radius, verticalRadius)
+		d := benchmarkWorld(radius, 3)
 		var vertices int
 		for _, c := range d.chunks {
+			c.lod = lodForDistance(max(abs(c.key.X), max(abs(c.key.Y), abs(c.key.Z))))
 			data := d.buildChunkMesh(c)
 			vertices += len(data.Vertices)
 		}
