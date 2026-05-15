@@ -17,6 +17,44 @@ go get github.com/tinyrange/gowin
 
 gowin currently targets Go 1.18 and newer.
 
+## High-Level API
+
+The root `github.com/tinyrange/gowin` package provides an XNA/raylib-inspired
+application loop, custom math types, textures, meshes, prepared draw commands,
+and lightweight scene nodes. It is intended for small apps and games that want a
+friendly API while still being able to move hot rendering paths into persistent
+mesh and draw-command data.
+
+```go
+type Game struct {
+	mesh *gowin.Mesh
+	draw *gowin.DrawCommand
+}
+
+func (g *Game) Init(ctx *gowin.Context) error {
+	g.mesh = ctx.NewMesh()
+	if err := g.mesh.SetData(myMeshData()); err != nil {
+		return err
+	}
+	draw, err := ctx.PrepareDraw(g.mesh, gowin.DrawOptions{
+		Shader: gowin.DefaultShader3D(),
+	})
+	g.draw = draw
+	return err
+}
+
+func (g *Game) Update(ctx *gowin.Context, dt float32) error { return nil }
+
+func (g *Game) Draw(ctx *gowin.Context) error {
+	ctx.Begin3D(gowin.Camera3D{Position: gowin.Vec3{Z: 5}, Up: gowin.Vec3{Y: 1}})
+	ctx.Draw(g.draw)
+	ctx.End3D()
+	return nil
+}
+```
+
+See `examples/draw_commands` for a complete example.
+
 ## Packages
 
 - `github.com/tinyrange/gowin/window`: native windows, input, clipboard, file
