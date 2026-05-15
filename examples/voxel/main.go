@@ -17,17 +17,23 @@ import (
 var errDone = errors.New("voxel demo complete")
 
 const (
-	chunkSize          = 16
-	defaultWorldSeed   = uint64(0x6d2b79f5a4c3e21b)
-	maxEnqueuePerFrame = 96
-	playerRadius       = float32(0.32)
-	playerHeight       = float32(1.78)
-	eyeHeight          = float32(1.58)
-	gravity            = float32(24)
-	jumpSpeed          = float32(8.2)
-	walkSpeed          = float32(5.2)
-	sprintSpeed        = float32(8.4)
-	reach              = float32(7)
+	chunkSize              = 16
+	distanceScale          = 32
+	defaultWorldSeed       = uint64(0x6d2b79f5a4c3e21b)
+	defaultViewRadius      = 16 * distanceScale
+	defaultVerticalRadius  = 8 * distanceScale
+	defaultMinSearchRadius = 64 * distanceScale
+	defaultDrawBudget      = 256 * 256
+	defaultVertexBudget    = 2200000 * distanceScale
+	maxEnqueuePerFrame     = 96
+	playerRadius           = float32(0.32)
+	playerHeight           = float32(1.78)
+	eyeHeight              = float32(1.58)
+	gravity                = float32(24)
+	jumpSpeed              = float32(8.2)
+	walkSpeed              = float32(5.2)
+	sprintSpeed            = float32(8.4)
+	reach                  = float32(7)
 )
 
 var worldSeed = defaultWorldSeed
@@ -542,16 +548,16 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		d.drainChunkQueues()
 	}
 	if d.viewRadius == 0 {
-		d.viewRadius = 16
+		d.viewRadius = defaultViewRadius
 	}
 	if d.verticalRadius == 0 {
-		d.verticalRadius = 8
+		d.verticalRadius = defaultVerticalRadius
 	}
 	if d.drawBudget == 0 {
-		d.drawBudget = 1000
+		d.drawBudget = defaultDrawBudget
 	}
 	if d.vertexBudget == 0 {
-		d.vertexBudget = 2200000
+		d.vertexBudget = defaultVertexBudget
 	}
 	if d.uploadBudget == 0 {
 		d.uploadBudget = 10
@@ -629,7 +635,7 @@ func (d *demo) chunkCandidates(center chunkKey) []chunkCandidate {
 	if look == (gowin.Vec3{}) {
 		look = gowin.Vec3{Z: -1}
 	}
-	maxDist := max(d.viewRadius, 64)
+	maxDist := max(d.viewRadius, defaultMinSearchRadius)
 	limit := max(d.drawBudget*4, maxEnqueuePerFrame*8)
 	candidates := make([]chunkCandidate, 0, limit)
 	for dist := 0; len(candidates) < limit && dist <= maxDist; dist++ {
@@ -644,7 +650,7 @@ func (d *demo) chunkCandidates(center chunkKey) []chunkCandidate {
 					if dir != (gowin.Vec3{}) {
 						alignment = dot3(dir.Normalize(), look)
 					}
-					if dist > 2 && alignment < -0.15 {
+					if dist > 2*distanceScale && alignment < -0.15 {
 						continue
 					}
 					if dist > d.viewRadius && alignment < 0.52 {
@@ -735,9 +741,9 @@ type chunkCandidate struct {
 
 func lodForDistance(dist int) int {
 	switch {
-	case dist <= 5:
+	case dist <= 5*distanceScale:
 		return 0
-	case dist <= 8:
+	case dist <= 8*distanceScale:
 		return 1
 	default:
 		return 2
@@ -892,8 +898,8 @@ func (d *demo) rebuildChunk(ctx *gowin.Context, c *chunk) error {
 		Uniforms: gowin.Uniforms{
 			"u_Ambient":        float32(0.38),
 			"u_LightDirection": gowin.Vec3{X: -0.45, Y: 0.8, Z: 0.35},
-			"u_FogStart":       float32(120),
-			"u_FogEnd":         float32(420),
+			"u_FogStart":       float32(120 * distanceScale),
+			"u_FogEnd":         float32(420 * distanceScale),
 			"u_FogColor":       color.NRGBA{R: 92, G: 134, B: 172, A: 245},
 		},
 	})
@@ -1382,10 +1388,10 @@ var cubeFaces = []cubeFace{
 func main() {
 	frames := flag.Int("frames", 0, "exit after this many frames; 0 runs interactively")
 	seed := flag.Uint64("seed", defaultWorldSeed, "world generation seed")
-	view := flag.Int("view", 16, "maximum chunk radius to consider")
-	vertical := flag.Int("vertical", 8, "vertical chunk radius to consider")
-	drawBudget := flag.Int("draw-budget", 1000, "maximum visible chunk draw commands")
-	vertexBudget := flag.Int("vertex-budget", 2200000, "maximum visible mesh vertices")
+	view := flag.Int("view", defaultViewRadius, "maximum chunk radius to consider")
+	vertical := flag.Int("vertical", defaultVerticalRadius, "vertical chunk radius to consider")
+	drawBudget := flag.Int("draw-budget", defaultDrawBudget, "maximum visible chunk draw commands")
+	vertexBudget := flag.Int("vertex-budget", defaultVertexBudget, "maximum visible mesh vertices")
 	flag.Parse()
 	worldSeed = *seed
 	err := gowin.Run(&demo{
