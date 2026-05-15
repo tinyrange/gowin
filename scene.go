@@ -54,7 +54,11 @@ func drawNode(ctx *Context, n *Node, parent Mat4) {
 	world := Mul(parent, n.Transform)
 	if n.Draw != nil {
 		prev := n.Draw.transform
-		n.Draw.transform = world
+		if prev == (Mat4{}) {
+			n.Draw.transform = world
+		} else {
+			n.Draw.transform = Mul(world, prev)
+		}
 		ctx.Draw(n.Draw)
 		n.Draw.transform = prev
 	}

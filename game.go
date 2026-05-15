@@ -33,11 +33,16 @@ type GameTime struct {
 }
 
 type Context struct {
-	win      graphics.Window
-	frame    graphics.Frame
-	text     *text.Renderer
-	time     GameTime
-	camera3D *Camera3D
+	win           graphics.Window
+	frame         graphics.Frame
+	text          *text.Renderer
+	time          GameTime
+	camera3D      *Camera3D
+	inputEvents   []window.InputEvent
+	mouseDelta    Vec2
+	lastMousePos  Vec2
+	haveMousePos  bool
+	mouseCaptured bool
 }
 
 func Run(game Game, cfg Config) error {
@@ -74,6 +79,7 @@ func Run(game Game, cfg Config) error {
 	err = win.Loop(func(f graphics.Frame) error {
 		now := time.Now()
 		ctx.frame = f
+		ctx.readFrameInput(f)
 		ctx.time = GameTime{
 			Delta:   float32(now.Sub(last).Seconds()),
 			Elapsed: float32(now.Sub(start).Seconds()),
@@ -116,8 +122,55 @@ func (c *Context) MousePosition() Vec2 {
 	return Vec2{X: x, Y: y}
 }
 
+func (c *Context) MouseDelta() Vec2 {
+	return c.mouseDelta
+}
+
+func (c *Context) SetMouseCaptured(captured bool) {
+	if c == nil || c.win == nil {
+		return
+	}
+	c.mouseCaptured = captured
+	if support, ok := c.win.PlatformWindow().(window.CursorCaptureSupport); ok {
+		support.SetCursorCaptured(captured)
+	}
+	c.haveMousePos = false
+	c.mouseDelta = Vec2{}
+}
+
+func (c *Context) IsMouseCaptured() bool {
+	return c.mouseCaptured
+}
+
+func (c *Context) InputEvents() []window.InputEvent {
+	return append([]window.InputEvent(nil), c.inputEvents...)
+}
+
 func (c *Context) IsKeyDown(key window.Key) bool {
 	return c.frame != nil && c.frame.GetKeyState(key).IsDown()
+}
+
+func (c *Context) readFrameInput(f graphics.Frame) {
+	c.inputEvents = f.DrainInputEvents()
+	c.mouseDelta = Vec2{}
+	hasRelative := false
+	for _, ev := range c.inputEvents {
+		if ev.Type != window.InputEventMouseMove {
+			continue
+		}
+		if ev.MouseDeltaX == 0 && ev.MouseDeltaY == 0 {
+			continue
+		}
+		c.mouseDelta.X += ev.MouseDeltaX / f.Scale()
+		c.mouseDelta.Y += ev.MouseDeltaY / f.Scale()
+		hasRelative = true
+	}
+	pos := c.MousePosition()
+	if !hasRelative && c.haveMousePos {
+		c.mouseDelta = pos.Sub(c.lastMousePos)
+	}
+	c.lastMousePos = pos
+	c.haveMousePos = true
 }
 
 func (c *Context) IsKeyPressed(key window.Key) bool {

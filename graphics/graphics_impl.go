@@ -513,6 +513,10 @@ func (f glFrame) GetButtonState(button window.Button) window.ButtonState {
 	return f.w.platform.GetButtonState(button)
 }
 
+func (f glFrame) DrainInputEvents() []window.InputEvent {
+	return f.w.platform.DrainInputEvents()
+}
+
 func (f glFrame) TextInput() string {
 	return f.w.platform.TextInput()
 }

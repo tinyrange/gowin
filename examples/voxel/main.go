@@ -44,6 +44,7 @@ type demo struct {
 	chunks    map[chunkKey]*chunk
 	player    gowin.Vec3
 	yaw       float32
+	pitch     float32
 	editSolid bool
 }
 
@@ -52,7 +53,9 @@ func (d *demo) Init(ctx *gowin.Context) error {
 	d.chunks = map[chunkKey]*chunk{}
 	d.player = gowin.Vec3{X: 4, Y: 8, Z: 8}
 	d.yaw = -0.8
+	d.pitch = -0.18
 	d.editSolid = true
+	ctx.SetMouseCaptured(true)
 	return d.streamChunks(ctx)
 }
 
@@ -61,7 +64,17 @@ func (d *demo) Update(ctx *gowin.Context, dt float32) error {
 		return errDone
 	}
 	if ctx.IsKeyPressed(gowin.KeyEscape) {
-		return errDone
+		ctx.SetMouseCaptured(false)
+	}
+	if ctx.IsButtonPressed(gowin.MouseLeft) {
+		ctx.SetMouseCaptured(true)
+	}
+
+	if ctx.IsMouseCaptured() {
+		mouse := ctx.MouseDelta()
+		d.yaw += mouse.X * 0.0025
+		d.pitch += mouse.Y * 0.0025
+		d.pitch = clamp(d.pitch, -1.3, 1.3)
 	}
 
 	turn := float32(1.8) * dt
@@ -73,7 +86,7 @@ func (d *demo) Update(ctx *gowin.Context, dt float32) error {
 	}
 
 	forward := gowin.Vec3{X: float32(math.Sin(float64(d.yaw))), Z: float32(-math.Cos(float64(d.yaw)))}
-	right := gowin.Vec3{X: forward.Z, Z: -forward.X}
+	right := gowin.Vec3{X: -forward.Z, Z: forward.X}
 	speed := float32(7) * dt
 	if ctx.IsKeyDown(gowin.KeyW) {
 		d.player = d.player.Add(forward.MulScalar(speed))
@@ -102,9 +115,10 @@ func (d *demo) Update(ctx *gowin.Context, dt float32) error {
 }
 
 func (d *demo) Draw(ctx *gowin.Context) error {
+	look := d.lookDirection()
 	camera := gowin.Camera3D{
 		Position: d.player,
-		Target:   d.player.Add(gowin.Vec3{X: float32(math.Sin(float64(d.yaw))), Y: -0.22, Z: float32(-math.Cos(float64(d.yaw)))}),
+		Target:   d.player.Add(look),
 		Up:       gowin.Vec3{Y: 1},
 		FOVY:     float32(math.Pi / 3),
 		Near:     0.05,
@@ -114,9 +128,18 @@ func (d *demo) Draw(ctx *gowin.Context) error {
 	ctx.DrawScene(d.scene)
 	ctx.End3D()
 
-	ctx.DrawText("WASD move  Q/E turn  Space/F up/down  R edit block", 16, 26, 16, color.White)
+	ctx.DrawText("WASD move  mouse look  click capture  Esc release  Space/F up/down  R edit block", 16, 26, 16, color.White)
 	ctx.DrawText(fmt.Sprintf("chunks: %d  pos: %.1f %.1f %.1f", len(d.chunks), d.player.X, d.player.Y, d.player.Z), 16, 50, 14, color.NRGBA{R: 212, G: 226, B: 235, A: 255})
 	return nil
+}
+
+func (d *demo) lookDirection() gowin.Vec3 {
+	cp := float32(math.Cos(float64(d.pitch)))
+	return gowin.Vec3{
+		X: float32(math.Sin(float64(d.yaw))) * cp,
+		Y: float32(math.Sin(float64(d.pitch))),
+		Z: float32(-math.Cos(float64(d.yaw))) * cp,
+	}
 }
 
 func (d *demo) streamChunks(ctx *gowin.Context) error {
@@ -280,6 +303,16 @@ func positiveMod(v, d int) int {
 		r += d
 	}
 	return r
+}
+
+func clamp(v, min, max float32) float32 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 type facePoint struct {

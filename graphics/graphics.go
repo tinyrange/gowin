@@ -49,6 +49,7 @@ type Frame interface {
 
 	GetKeyState(key window.Key) window.KeyState
 	GetButtonState(button window.Button) window.ButtonState
+	DrainInputEvents() []window.InputEvent
 	// TextInput returns the UTF-8 text entered since the last call to TextInput.
 	TextInput() string
 

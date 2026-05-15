@@ -88,6 +88,8 @@ type Cocoa struct {
 
 	// URL handler for custom URL scheme events (e.g., crumblecracker://)
 	urlHandler func(url string)
+
+	cursorCaptured bool
 }
 
 // Global URL queue for Apple Events callbacks (accessed from Objective-C runtime)
@@ -103,6 +105,8 @@ var (
 	// CoreFoundation.
 	cfRunLoopRunInMode func(uintptr, float64, bool) int32
 	cfDefaultMode      uintptr
+
+	cgAssociateMouseAndMouseCursorPosition func(bool) int32
 
 	// Cached selectors.
 	selAlloc                     objc.SEL
@@ -188,6 +192,10 @@ var (
 	// NSAppleEventDescriptor selectors (URL extraction).
 	selParamDescriptorForKeyword objc.SEL
 	selStringValue               objc.SEL
+
+	// NSCursor selectors.
+	selHide   objc.SEL
+	selUnhide objc.SEL
 )
 
 // Subset of NSEventType values we care about.
@@ -352,8 +360,27 @@ func (c *Cocoa) Cursor() (float32, float32) {
 	return x, float32(h) - y
 }
 
+func (c *Cocoa) SetCursorCaptured(captured bool) {
+	if c.cursorCaptured == captured {
+		return
+	}
+	c.cursorCaptured = captured
+	if cgAssociateMouseAndMouseCursorPosition != nil {
+		cgAssociateMouseAndMouseCursorPosition(!captured)
+	}
+	cursorClass := objc.ID(objc.GetClass("NSCursor"))
+	if captured {
+		cursorClass.Send(selHide)
+	} else {
+		cursorClass.Send(selUnhide)
+	}
+}
+
 // Close tears down the GL context and window.
 func (c *Cocoa) Close() {
+	if c.cursorCaptured {
+		c.SetCursorCaptured(false)
+	}
 	if c.ctx != 0 {
 		objc.ID(objc.GetClass("NSOpenGLContext")).Send(selClearCurrentContext)
 		c.ctx.Send(selRelease)
@@ -494,12 +521,17 @@ func loadObjc() error {
 	if _, err := purego.Dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", purego.RTLD_GLOBAL); err != nil {
 		return err
 	}
+	cg, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_GLOBAL)
+	if err != nil {
+		return err
+	}
 	cf, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_GLOBAL)
 	if err != nil {
 		return err
 	}
 
 	purego.RegisterLibFunc(&cfRunLoopRunInMode, cf, "CFRunLoopRunInMode")
+	purego.RegisterLibFunc(&cgAssociateMouseAndMouseCursorPosition, cg, "CGAssociateMouseAndMouseCursorPosition")
 
 	return nil
 }
@@ -588,6 +620,10 @@ func loadSelectors() {
 	// NSAppleEventDescriptor (URL extraction).
 	selParamDescriptorForKeyword = objc.RegisterName("paramDescriptorForKeyword:")
 	selStringValue = objc.RegisterName("stringValue")
+
+	// NSCursor.
+	selHide = objc.RegisterName("hide")
+	selUnhide = objc.RegisterName("unhide")
 }
 
 func nsString(v string) objc.ID {
@@ -879,6 +915,8 @@ func (c *Cocoa) processEvent(ev objc.ID) {
 			Mods:        cocoaFlagsToMods(flags),
 			MouseX:      x,
 			MouseY:      y,
+			MouseDeltaX: float32(objc.Send[float64](ev, selEventDeltaX)),
+			MouseDeltaY: float32(objc.Send[float64](ev, selEventDeltaY)),
 		})
 
 	case nsEventTypeScrollWheel:

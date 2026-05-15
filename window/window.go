@@ -21,6 +21,10 @@ type Window interface {
 	TextInput() string
 }
 
+type CursorCaptureSupport interface {
+	SetCursorCaptured(captured bool)
+}
+
 // DockMenuItem represents an item in the dock menu (macOS only)
 type DockMenuItem struct {
 	Title     string
