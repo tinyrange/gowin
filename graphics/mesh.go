@@ -107,6 +107,13 @@ type Draw3DOptions struct {
 	// Shader overrides the built-in lit vertex-color shader. Custom shaders must
 	// use the Mesh3D vertex layout documented on Window.NewShader3D.
 	Shader Shader3D
+	// Textures binds sampler uniforms by name. The built-in 3D shader samples
+	// u_texture and multiplies it by vertex color. When no texture is supplied,
+	// a white texture is bound so vertex-color rendering still works.
+	Textures map[string]Texture
+	// Uniforms sets additional shader uniforms by name. Supported values are
+	// float32/float64/int, Vec3, Mat4, and color.Color.
+	Uniforms map[string]interface{}
 	// Ambient controls minimum light contribution. Zero uses a small default.
 	Ambient float32
 	// LightDirection points from the surface toward the directional light.

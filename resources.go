@@ -16,6 +16,15 @@ type Texture2D struct {
 	g graphics.Texture
 }
 
+type RenderTarget2D struct {
+	g graphics.RenderTarget
+}
+
+type RenderTargetOptions struct {
+	NoClear    bool
+	ClearColor color.Color
+}
+
 func LoadImage(r io.Reader) (image.Image, error) {
 	img, _, err := image.Decode(r)
 	return img, err
@@ -48,6 +57,64 @@ func (t Texture2D) Size() (int, int) {
 		return 0, 0
 	}
 	return t.g.Size()
+}
+
+func (c *Context) NewRenderTarget2D(width, height int) (*RenderTarget2D, error) {
+	if c == nil || c.win == nil {
+		return nil, fmt.Errorf("nil context")
+	}
+	rt, err := c.win.NewRenderTarget(width, height)
+	if err != nil {
+		return nil, err
+	}
+	return &RenderTarget2D{g: rt}, nil
+}
+
+func (rt *RenderTarget2D) Texture() Texture2D {
+	if rt == nil || rt.g == nil {
+		return Texture2D{}
+	}
+	return Texture2D{g: rt.g.Texture()}
+}
+
+func (rt *RenderTarget2D) Size() (int, int) {
+	if rt == nil || rt.g == nil {
+		return 0, 0
+	}
+	return rt.g.Size()
+}
+
+func (rt *RenderTarget2D) Resize(width, height int) error {
+	if rt == nil || rt.g == nil {
+		return fmt.Errorf("nil render target")
+	}
+	return rt.g.Resize(width, height)
+}
+
+func (rt *RenderTarget2D) Destroy() {
+	if rt == nil || rt.g == nil {
+		return
+	}
+	rt.g.Destroy()
+	rt.g = nil
+}
+
+func (c *Context) DrawTo(target *RenderTarget2D, opts RenderTargetOptions, draw func(*Context) error) error {
+	if c == nil || c.frame == nil {
+		return fmt.Errorf("no active frame")
+	}
+	if target == nil || target.g == nil {
+		return fmt.Errorf("nil render target")
+	}
+	return c.frame.RenderToTarget(target.g, graphics.RenderTargetOptions{
+		NoClear:    opts.NoClear,
+		ClearColor: opts.ClearColor,
+	}, func(graphics.Frame) error {
+		if draw == nil {
+			return nil
+		}
+		return draw(c)
+	})
 }
 
 type ShaderKind uint8

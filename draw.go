@@ -124,6 +124,8 @@ func (c *Context) Draw(cmd *DrawCommand) {
 		View:           view,
 		Projection:     proj,
 		Shader:         cmd.shader.g3d,
+		Textures:       graphicsTextures(cmd.textures),
+		Uniforms:       graphicsUniforms(cmd.uniforms),
 		Ambient:        ambient,
 		LightDirection: light,
 		FogStart:       fogStart,
@@ -179,6 +181,7 @@ func (c *Context) DrawCube(pos, size Vec3, col color.Color) {
 	if err := mesh.SetData(data); err != nil {
 		return
 	}
+	defer mesh.Destroy()
 	cmd := c.MustPrepareDraw(mesh, DrawOptions{Transform: Translate3D(pos.X, pos.Y, pos.Z)})
 	c.Draw(cmd)
 }
@@ -201,6 +204,35 @@ func cloneTextures(in map[string]Texture2D) map[string]Texture2D {
 	out := make(map[string]Texture2D, len(in))
 	for k, v := range in {
 		out[k] = v
+	}
+	return out
+}
+
+func graphicsTextures(in map[string]Texture2D) map[string]graphics.Texture {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]graphics.Texture, len(in))
+	for k, v := range in {
+		out[k] = v.g
+	}
+	return out
+}
+
+func graphicsUniforms(in Uniforms) map[string]interface{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		switch value := v.(type) {
+		case Vec3:
+			out[k] = value.graphics()
+		case Mat4:
+			out[k] = graphics.Mat4(value)
+		default:
+			out[k] = value
+		}
 	}
 	return out
 }

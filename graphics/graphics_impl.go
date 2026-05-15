@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/draw"
 	"math"
+	"sort"
 	"time"
 	"unsafe"
 
@@ -58,6 +59,7 @@ in vec4 a_color;
 out vec3 v_normal;
 out vec3 v_worldPos;
 out vec3 v_viewPos;
+out vec2 v_texCoord;
 out vec4 v_color;
 
 uniform mat4 u_model;
@@ -69,6 +71,7 @@ void main() {
 	gl_Position = u_projection * u_view * worldPos;
 	v_worldPos = worldPos.xyz;
 	v_viewPos = (u_view * worldPos).xyz;
+	v_texCoord = a_texCoord;
 	v_normal = mat3(u_model) * a_normal;
 	v_color = a_color;
 }`
@@ -77,10 +80,12 @@ void main() {
 in vec3 v_normal;
 in vec3 v_worldPos;
 in vec3 v_viewPos;
+in vec2 v_texCoord;
 in vec4 v_color;
 
 out vec4 fragColor;
 
+uniform sampler2D u_texture;
 uniform vec4 u_lightDirection;
 uniform float u_ambient;
 uniform vec4 u_fogColor;
@@ -92,7 +97,8 @@ void main() {
 	vec3 l = normalize(u_lightDirection.xyz);
 	float diffuse = max(dot(n, l), 0.0);
 	float lit = clamp(u_ambient + diffuse * (1.0 - u_ambient), 0.0, 1.0);
-	vec4 litColor = vec4(v_color.rgb * lit, v_color.a);
+	vec4 texColor = texture(u_texture, v_texCoord);
+	vec4 litColor = vec4(texColor.rgb * v_color.rgb * lit, texColor.a * v_color.a);
 	if (u_fogEnd > u_fogStart) {
 		float dist = length(v_viewPos);
 		float fog = clamp((dist - u_fogStart) / (u_fogEnd - u_fogStart), 0.0, 1.0);
@@ -1106,11 +1112,75 @@ func (f glFrame) RenderMesh3D(mesh Mesh3D, opts Draw3DOptions) {
 	if fogEndUniform >= 0 {
 		f.w.gl.Uniform1f(fogEndUniform, opts.FogEnd)
 	}
+	f.bind3DTextures(program, opts.Textures)
+	f.set3DUniforms(program, opts.Uniforms)
 	f.w.gl.BindVertexArray(m.vao)
 	f.w.gl.DrawElements(glpkg.Triangles, m.indexCount, glpkg.UnsignedInt, 0)
 
 	f.w.gl.Disable(glpkg.DepthTest)
 	f.w.setProjection(f.w.projectionW, f.w.projectionH)
+}
+
+func (f glFrame) bind3DTextures(program uint32, textures map[string]Texture) {
+	if len(textures) == 0 {
+		loc := f.w.gl.GetUniformLocation(program, "u_texture")
+		if loc >= 0 {
+			f.w.gl.ActiveTexture(glpkg.Texture0)
+			f.w.gl.BindTexture(glpkg.Texture2D, f.w.getWhiteTexture().id)
+			f.w.gl.Uniform1i(loc, 0)
+		}
+		return
+	}
+	names := make([]string, 0, len(textures))
+	for name := range textures {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for slot, name := range names {
+		loc := f.w.gl.GetUniformLocation(program, name)
+		if loc < 0 {
+			continue
+		}
+		tex := f.w.getWhiteTexture()
+		if t, ok := textures[name].(*glTexture); ok && t != nil {
+			tex = t
+		}
+		f.w.gl.ActiveTexture(glpkg.Texture0 + uint32(slot))
+		f.w.gl.BindTexture(glpkg.Texture2D, tex.id)
+		f.w.gl.Uniform1i(loc, int32(slot))
+	}
+}
+
+func (f glFrame) set3DUniforms(program uint32, uniforms map[string]interface{}) {
+	if len(uniforms) == 0 {
+		return
+	}
+	names := make([]string, 0, len(uniforms))
+	for name := range uniforms {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		loc := f.w.gl.GetUniformLocation(program, name)
+		if loc < 0 {
+			continue
+		}
+		switch v := uniforms[name].(type) {
+		case float32:
+			f.w.gl.Uniform1f(loc, v)
+		case float64:
+			f.w.gl.Uniform1f(loc, float32(v))
+		case int:
+			f.w.gl.Uniform1i(loc, int32(v))
+		case Vec3:
+			f.w.gl.Uniform4f(loc, v.X, v.Y, v.Z, 0)
+		case Mat4:
+			f.w.gl.UniformMatrix4fv(loc, 1, false, &v[0])
+		case color.Color:
+			rgba := ColorToFloat32(v)
+			f.w.gl.Uniform4f(loc, rgba[0], rgba[1], rgba[2], rgba[3])
+		}
+	}
 }
 
 func (f glFrame) resolve3DOptions(opts Draw3DOptions) (Mat4, Mat4, Mat4, float32, Vec3) {
@@ -1262,6 +1332,11 @@ func (f glFrame) PushClipMesh3D(mesh Mesh3D, opts Draw3DOptions) {
 	w.gl.UniformMatrix4fv(w.projection3DUniform, 1, false, &projection[0])
 	w.gl.Uniform4f(w.light3DUniform, light.X, light.Y, light.Z, 0)
 	w.gl.Uniform1f(w.ambient3DUniform, ambient)
+	if loc := w.gl.GetUniformLocation(w.shader3DProgram, "u_texture"); loc >= 0 {
+		w.gl.ActiveTexture(glpkg.Texture0)
+		w.gl.BindTexture(glpkg.Texture2D, w.getWhiteTexture().id)
+		w.gl.Uniform1i(loc, 0)
+	}
 	w.gl.BindVertexArray(m.vao)
 	w.gl.DrawElements(glpkg.Triangles, m.indexCount, glpkg.UnsignedInt, 0)
 

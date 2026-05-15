@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image"
 	"image/color"
 	"math"
 	"runtime"
@@ -110,6 +111,7 @@ type demo struct {
 	vertexBudget    int
 	scene           *gowin.Scene
 	chunks          map[chunkKey]*chunk
+	atlas           gowin.Texture2D
 	pending         map[chunkKey]bool
 	loadCenter      chunkKey
 	loadRevision    uint64
@@ -142,6 +144,11 @@ type demo struct {
 func (d *demo) Init(ctx *gowin.Context) error {
 	d.scene = gowin.NewScene()
 	d.chunks = map[chunkKey]*chunk{}
+	atlas, err := createBlockAtlas(ctx)
+	if err != nil {
+		return err
+	}
+	d.atlas = atlas
 	d.pending = map[chunkKey]bool{}
 	d.jobs = make(chan chunkJob, 4096)
 	d.results = make(chan chunkResult, 4096)
@@ -895,6 +902,9 @@ func (d *demo) rebuildChunk(ctx *gowin.Context, c *chunk) error {
 	}
 	draw, err := ctx.PrepareDraw(mesh, gowin.DrawOptions{
 		Transform: gowin.Translate3D(float32(c.key.X*chunkSize), float32(c.key.Y*chunkSize), float32(c.key.Z*chunkSize)),
+		Textures: map[string]gowin.Texture2D{
+			"u_texture": d.atlas,
+		},
 		Uniforms: gowin.Uniforms{
 			"u_Ambient":        float32(0.38),
 			"u_LightDirection": gowin.Vec3{X: -0.45, Y: 0.8, Z: 0.35},
@@ -936,7 +946,7 @@ func (d *demo) buildChunkMesh(c *chunk) gowin.MeshData {
 						continue
 					}
 					base := uint32(len(vertices))
-					col := blockFaceColor(kind, face.normal, world)
+					col := blockVertexTint(face.normal, world)
 					for _, p := range face.points {
 						shaded := shadeColor(col, d.vertexAO(world, face.normal, p, step))
 						vertices = append(vertices, gowin.Vertex3D{
@@ -946,7 +956,7 @@ func (d *demo) buildChunkMesh(c *chunk) gowin.MeshData {
 								Z: float32(b.Z) + p.Z*float32(step),
 							},
 							Normal: face.normal,
-							UV:     p.UV,
+							UV:     blockAtlasUV(kind, face.normal, p.UV),
 							Color:  shaded,
 						})
 					}
@@ -1176,30 +1186,103 @@ func islandParams(cellX, cellZ int) (cx, cy, cz, rx, ry, rz float64) {
 	return
 }
 
-func blockFaceColor(kind blockKind, normal gowin.Vec3, b worldBlock) color.Color {
-	var base color.NRGBA
+const (
+	atlasTileSize = 16
+	atlasCols     = 4
+	atlasRows     = 3
+)
+
+func createBlockAtlas(ctx *gowin.Context) (gowin.Texture2D, error) {
+	img := image.NewNRGBA(image.Rect(0, 0, atlasCols*atlasTileSize, atlasRows*atlasTileSize))
+	for kind := blockGrass; kind <= blockCrystal; kind++ {
+		drawBlockTile(img, tileIndex(kind, gowin.Vec3{Y: 1}), tileBaseColor(kind, gowin.Vec3{Y: 1}), kind)
+		drawBlockTile(img, tileIndex(kind, gowin.Vec3{}), tileBaseColor(kind, gowin.Vec3{}), kind)
+	}
+	return ctx.NewTexture(img)
+}
+
+func drawBlockTile(img *image.NRGBA, tile int, base color.NRGBA, kind blockKind) {
+	ox := (tile % atlasCols) * atlasTileSize
+	oy := (tile / atlasCols) * atlasTileSize
+	for y := 0; y < atlasTileSize; y++ {
+		for x := 0; x < atlasTileSize; x++ {
+			noise := int(hash3(ox+x, int(kind)*37, oy+y)%33) - 16
+			edge := 0
+			if x == 0 || y == 0 {
+				edge = -18
+			}
+			if x == atlasTileSize-1 || y == atlasTileSize-1 {
+				edge = 10
+			}
+			grain := 0
+			if kind == blockWood && x%5 == 0 {
+				grain = -22
+			}
+			if kind == blockStone && (x+y)%7 == 0 {
+				grain = -16
+			}
+			if kind == blockLeaves && hash3(x, y, int(kind))%5 == 0 {
+				grain = 24
+			}
+			if kind == blockCrystal && (x == y || x+y == atlasTileSize-1) {
+				grain = 38
+			}
+			img.SetNRGBA(ox+x, oy+y, color.NRGBA{
+				R: uint8(clampInt(int(base.R)+noise+edge+grain, 0, 255)),
+				G: uint8(clampInt(int(base.G)+noise+edge+grain, 0, 255)),
+				B: uint8(clampInt(int(base.B)+noise+edge+grain, 0, 255)),
+				A: base.A,
+			})
+		}
+	}
+}
+
+func blockAtlasUV(kind blockKind, normal gowin.Vec3, uv gowin.Vec2) gowin.Vec2 {
+	tile := tileIndex(kind, normal)
+	x := tile % atlasCols
+	y := tile / atlasCols
+	pad := float32(0.5) / float32(atlasTileSize)
+	u := (float32(x) + pad + uv.X*(1-pad*2)) / float32(atlasCols)
+	v := (float32(y) + pad + uv.Y*(1-pad*2)) / float32(atlasRows)
+	return gowin.Vec2{X: u, Y: v}
+}
+
+func tileIndex(kind blockKind, normal gowin.Vec3) int {
+	if kind == blockGrass && normal.Y > 0 {
+		return 0
+	}
+	if kind == blockGrass {
+		return 1
+	}
+	return int(kind)
+}
+
+func tileBaseColor(kind blockKind, normal gowin.Vec3) color.NRGBA {
 	switch kind {
 	case blockGrass:
 		if normal.Y > 0 {
-			base = color.NRGBA{R: 78, G: 161, B: 75, A: 255}
-		} else {
-			base = color.NRGBA{R: 96, G: 112, B: 63, A: 255}
+			return color.NRGBA{R: 78, G: 161, B: 75, A: 255}
 		}
+		return color.NRGBA{R: 96, G: 112, B: 63, A: 255}
 	case blockDirt:
-		base = color.NRGBA{R: 116, G: 82, B: 52, A: 255}
+		return color.NRGBA{R: 116, G: 82, B: 52, A: 255}
 	case blockStone:
-		base = color.NRGBA{R: 95, G: 99, B: 108, A: 255}
+		return color.NRGBA{R: 95, G: 99, B: 108, A: 255}
 	case blockWood:
-		base = color.NRGBA{R: 119, G: 78, B: 44, A: 255}
+		return color.NRGBA{R: 119, G: 78, B: 44, A: 255}
 	case blockLeaves:
-		base = color.NRGBA{R: 50, G: 128, B: 64, A: 255}
+		return color.NRGBA{R: 50, G: 128, B: 64, A: 255}
 	case blockSand:
-		base = color.NRGBA{R: 210, G: 178, B: 96, A: 255}
+		return color.NRGBA{R: 210, G: 178, B: 96, A: 255}
 	case blockSnow:
-		base = color.NRGBA{R: 218, G: 229, B: 232, A: 255}
+		return color.NRGBA{R: 218, G: 229, B: 232, A: 255}
 	case blockCrystal:
-		base = color.NRGBA{R: 99, G: 220, B: 220, A: 255}
+		return color.NRGBA{R: 99, G: 220, B: 220, A: 210}
 	}
+	return color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+}
+
+func blockVertexTint(normal gowin.Vec3, b worldBlock) color.Color {
 	noise := int(hash3(b.X, b.Y, b.Z)%31) - 15
 	shade := 0
 	if normal.Y < 0 {
@@ -1207,10 +1290,11 @@ func blockFaceColor(kind blockKind, normal gowin.Vec3, b worldBlock) color.Color
 	} else if normal.X != 0 || normal.Z != 0 {
 		shade = -18
 	}
+	base := 232
 	return color.NRGBA{
-		R: uint8(clampInt(int(base.R)+noise+shade, 0, 255)),
-		G: uint8(clampInt(int(base.G)+noise+shade, 0, 255)),
-		B: uint8(clampInt(int(base.B)+noise+shade, 0, 255)),
+		R: uint8(clampInt(base+noise+shade, 0, 255)),
+		G: uint8(clampInt(base+noise+shade, 0, 255)),
+		B: uint8(clampInt(base+noise+shade, 0, 255)),
 		A: 255,
 	}
 }

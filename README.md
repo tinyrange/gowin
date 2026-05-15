@@ -21,10 +21,10 @@ gowin currently targets Go 1.18 and newer.
 
 The root `github.com/tinyrange/gowin` package provides an XNA/raylib-inspired
 application loop, custom math types, textures built from Go `image.Image`
-values, `image/color` colors, meshes, prepared draw commands, custom 3D
-shaders, and lightweight scene nodes. It is intended for small apps and games
-that want a friendly API while still being able to move hot rendering paths into
-persistent mesh and draw-command data.
+values, `image/color` colors, render targets, meshes, prepared draw commands,
+custom 3D shaders, and lightweight scene nodes. It is intended for small apps
+and games that want a friendly API while still being able to move hot rendering
+paths into persistent mesh and draw-command data.
 
 ```go
 package main
@@ -36,17 +36,31 @@ import (
 )
 
 type Game struct {
-	mesh *gowin.Mesh
-	draw *gowin.DrawCommand
+	mesh  *gowin.Mesh
+	draw  *gowin.DrawCommand
+	atlas gowin.Texture2D
 }
 
 func (g *Game) Init(ctx *gowin.Context) error {
+	atlas, err := gowin.LoadTexture(ctx, atlasReader)
+	if err != nil {
+		return err
+	}
+	g.atlas = atlas
+
 	g.mesh = ctx.NewMesh()
 	if err := g.mesh.SetData(myMeshData()); err != nil {
 		return err
 	}
+
 	draw, err := ctx.PrepareDraw(g.mesh, gowin.DrawOptions{
 		Shader: gowin.DefaultShader3D(),
+		Textures: map[string]gowin.Texture2D{
+			"u_texture": g.atlas,
+		},
+		Uniforms: gowin.Uniforms{
+			"u_Ambient": 0.35,
+		},
 	})
 	g.draw = draw
 	return err
@@ -64,9 +78,12 @@ func (g *Game) Draw(ctx *gowin.Context) error {
 ```
 
 Root-package conveniences include `LoadImage`, `Context.NewTexture`,
-`LoadTexture`, `LoadShader`, `Context.DrawScene`, `Mesh.Destroy`, and
-`Context.WriteScreenshotPNG`. See `examples/draw_commands` for a complete draw
-command example and `examples/voxel` for a streaming editable voxel world demo.
+`LoadTexture`, `Context.NewRenderTarget2D`, `Context.DrawTo`, `LoadShader`,
+`Context.DrawScene`, `Mesh.Destroy`, and `Context.WriteScreenshotPNG`. Prepared
+draw commands can bind texture samplers by uniform name and pass common shader
+uniform values. See `examples/draw_commands` for a complete draw command example
+and `examples/voxel` for a streaming editable voxel world demo with a generated
+block texture atlas.
 
 ## Packages
 
