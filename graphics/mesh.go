@@ -1,5 +1,7 @@
 package graphics
 
+import "image/color"
+
 // Rect is a logical-pixel rectangle in the top-left origin coordinate space used
 // by Frame drawing methods.
 type Rect struct {
@@ -110,6 +112,11 @@ type Draw3DOptions struct {
 	// LightDirection points from the surface toward the directional light.
 	// Zero uses a camera/front-left default.
 	LightDirection Vec3
+	// FogStart/FogEnd enable distance fog when FogEnd is greater than FogStart.
+	// FogColor defaults to transparent black when nil.
+	FogStart float32
+	FogEnd   float32
+	FogColor color.Color
 	// ClipDepthTest controls whether PushClipMesh3D depth-tests while writing
 	// the stencil clip. The zero value is false, which is the recommended
 	// projected-outline mode for flat surface clipping.

@@ -10,8 +10,7 @@ func BenchmarkChunkGeneration16(b *testing.B) {
 	spawn := findSpawnPoint()
 	center := worldChunk(spawn.X, spawn.Y, spawn.Z)
 	for i := 0; i < b.N; i++ {
-		d := benchmarkDemo()
-		c := d.newChunk(chunkKey{X: center.X + (i & 1), Y: center.Y, Z: center.Z + ((i >> 1) & 1)})
+		c := generateChunk(chunkKey{X: center.X + (i & 1), Y: center.Y, Z: center.Z + ((i >> 1) & 1)})
 		if countChunkBlocks(c) == 0 {
 			b.Fatal("generated empty chunk")
 		}
@@ -43,6 +42,61 @@ func BenchmarkChunkMesh16WithNeighbors(b *testing.B) {
 		data := d.buildChunkMesh(c)
 		if len(data.Vertices) == 0 || len(data.Indices) == 0 {
 			b.Fatal("generated empty mesh")
+		}
+	}
+}
+
+func BenchmarkChunkMeshLODLevels(b *testing.B) {
+	spawn := findSpawnPoint()
+	center := worldChunk(spawn.X, spawn.Y, spawn.Z)
+	for _, lod := range []int{0, 1, 2} {
+		b.Run(string(rune('0'+lod)), func(b *testing.B) {
+			d := benchmarkWorld(center, 1, 1)
+			c := findLODMeshChunk(d, center, lod)
+			if c == nil {
+				b.Fatal("missing lod chunk")
+			}
+			c.lod = lod
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				data := d.buildChunkMesh(c)
+				if len(data.Vertices) == 0 {
+					b.Fatal("generated empty mesh")
+				}
+			}
+		})
+	}
+}
+
+func findLODMeshChunk(d *demo, center chunkKey, lod int) *chunk {
+	if c := d.chunks[center]; c != nil {
+		c.lod = lod
+		if data := d.buildChunkMesh(c); len(data.Vertices) != 0 {
+			return c
+		}
+	}
+	for _, c := range d.chunks {
+		c.lod = lod
+		if data := d.buildChunkMesh(c); len(data.Vertices) != 0 {
+			return c
+		}
+	}
+	return nil
+}
+
+func BenchmarkIslandDensity(b *testing.B) {
+	spawn := findSpawnPoint()
+	center := worldBlock{X: int(spawn.X), Y: int(spawn.Y), Z: int(spawn.Z)}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		v := floatingIslandDensity(worldBlock{
+			X: center.X + i%32,
+			Y: center.Y + (i/32)%32,
+			Z: center.Z + (i/1024)%32,
+		})
+		if v < -2 {
+			b.Fatal(v)
 		}
 	}
 }
@@ -79,7 +133,7 @@ func benchmarkWorld(center chunkKey, radius, vertical int) *demo {
 		for z := -radius; z <= radius; z++ {
 			for x := -radius; x <= radius; x++ {
 				key := chunkKey{X: center.X + x, Y: center.Y + y, Z: center.Z + z}
-				d.chunks[key] = d.newChunk(key)
+				d.chunks[key] = generateChunk(key)
 			}
 		}
 	}

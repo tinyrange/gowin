@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"runtime"
 	"sort"
+	"sync/atomic"
+	"time"
 
 	"github.com/tinyrange/gowin"
 )
@@ -59,6 +62,18 @@ type chunk struct {
 	dirty       bool
 	lod         int
 	vertexCount int
+	loadDist    int
+}
+
+type chunkJob struct {
+	key  chunkKey
+	lod  int
+	dist int
+}
+
+type chunkResult struct {
+	chunk   *chunk
+	elapsed time.Duration
 }
 
 type rayHit struct {
@@ -81,7 +96,19 @@ type demo struct {
 	vertexBudget    int
 	scene           *gowin.Scene
 	chunks          map[chunkKey]*chunk
+	pending         map[chunkKey]bool
+	jobs            chan chunkJob
+	results         chan chunkResult
+	stopWorkers     chan struct{}
+	workersStarted  bool
 	visibleVertices int
+	visibleChunks   int
+	pendingCount    int
+	completedChunks uint64
+	totalGenNanos   int64
+	rebuiltMeshes   uint64
+	totalMeshNanos  int64
+	uploadBudget    int
 
 	player   gowin.Vec3 // feet position
 	vel      gowin.Vec3
@@ -97,11 +124,52 @@ type demo struct {
 func (d *demo) Init(ctx *gowin.Context) error {
 	d.scene = gowin.NewScene()
 	d.chunks = map[chunkKey]*chunk{}
+	d.pending = map[chunkKey]bool{}
+	d.jobs = make(chan chunkJob, 4096)
+	d.results = make(chan chunkResult, 4096)
+	d.stopWorkers = make(chan struct{})
 	d.player = findSpawnPoint()
 	d.yaw = -0.8
 	d.pitch = -0.15
 	ctx.SetMouseCaptured(true)
+	d.startWorkers()
 	return d.streamChunks(ctx)
+}
+
+func (d *demo) Shutdown(ctx *gowin.Context) error {
+	if d.stopWorkers != nil {
+		close(d.stopWorkers)
+		d.stopWorkers = nil
+	}
+	return nil
+}
+
+func (d *demo) startWorkers() {
+	if d.workersStarted {
+		return
+	}
+	d.workersStarted = true
+	n := max(1, runtime.NumCPU()-1)
+	for i := 0; i < n; i++ {
+		go func() {
+			for {
+				select {
+				case <-d.stopWorkers:
+					return
+				case job := <-d.jobs:
+					start := time.Now()
+					c := generateChunk(job.key)
+					c.lod = job.lod
+					c.loadDist = job.dist
+					select {
+					case d.results <- chunkResult{chunk: c, elapsed: time.Since(start)}:
+					case <-d.stopWorkers:
+						return
+					}
+				}
+			}
+		}()
+	}
 }
 
 func (d *demo) Update(ctx *gowin.Context, dt float32) error {
@@ -256,8 +324,23 @@ func (d *demo) Draw(ctx *gowin.Context) error {
 	ctx.End3D()
 
 	ctx.DrawText("WASD move  Shift sprint  Space jump  mouse look  LMB delete  RMB place  Esc release", 16, 26, 16, color.White)
-	ctx.DrawText(fmt.Sprintf("chunks: %d  verts: %d/%d  pos: %.1f %.1f %.1f", len(d.chunks), d.visibleVertices, d.vertexBudget, d.player.X, d.player.Y, d.player.Z), 16, 50, 14, color.NRGBA{R: 212, G: 226, B: 235, A: 255})
+	ctx.DrawText(fmt.Sprintf("draws: %d/%d  chunks: %d +%d  verts: %d/%d  gen: %.2fms mesh: %.2fms", d.visibleChunks, d.drawBudget, len(d.chunks), d.pendingCount, d.visibleVertices, d.vertexBudget, d.averageGenMillis(), d.averageMeshMillis()), 16, 50, 14, color.NRGBA{R: 212, G: 226, B: 235, A: 255})
 	return nil
+}
+
+func (d *demo) averageGenMillis() float64 {
+	return averageMillis(atomic.LoadInt64(&d.totalGenNanos), atomic.LoadUint64(&d.completedChunks))
+}
+
+func (d *demo) averageMeshMillis() float64 {
+	return averageMillis(atomic.LoadInt64(&d.totalMeshNanos), atomic.LoadUint64(&d.rebuiltMeshes))
+}
+
+func averageMillis(nanos int64, count uint64) float64 {
+	if count == 0 {
+		return 0
+	}
+	return float64(nanos) / float64(count) / 1e6
 }
 
 func (d *demo) eyePosition() gowin.Vec3 {
@@ -386,18 +469,22 @@ func findSpawnPoint() gowin.Vec3 {
 }
 
 func (d *demo) streamChunks(ctx *gowin.Context) error {
+	d.processChunkResults(ctx)
 	center := worldChunk(d.player.X, d.player.Y, d.player.Z)
 	if d.viewRadius == 0 {
-		d.viewRadius = 5
+		d.viewRadius = 16
 	}
 	if d.verticalRadius == 0 {
-		d.verticalRadius = 3
+		d.verticalRadius = 8
 	}
 	if d.drawBudget == 0 {
-		d.drawBudget = 260
+		d.drawBudget = 1000
 	}
 	if d.vertexBudget == 0 {
-		d.vertexBudget = 450000
+		d.vertexBudget = 2200000
+	}
+	if d.uploadBudget == 0 {
+		d.uploadBudget = 10
 	}
 	needed := map[chunkKey]bool{}
 	candidates := make([]chunkCandidate, 0, (d.viewRadius*2+1)*(d.viewRadius*2+1)*(d.verticalRadius*2+1))
@@ -429,12 +516,8 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		needed[key] = true
 		c := d.chunks[key]
 		if c == nil {
-			c = d.newChunk(key)
-			d.chunks[key] = c
-			d.markChunkDirty(key)
-			for _, n := range allNeighborKeys(key) {
-				d.markChunkDirty(n)
-			}
+			d.enqueueChunk(candidate)
+			continue
 		}
 		if c.lod != candidate.lod {
 			c.lod = candidate.lod
@@ -456,6 +539,7 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		d.visibleVertices += c.vertexCount
 		draws++
 	}
+	d.visibleChunks = draws
 	for key, c := range d.chunks {
 		if needed[key] {
 			continue
@@ -468,7 +552,52 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		}
 		delete(d.chunks, key)
 	}
+	for key := range d.pending {
+		if !needed[key] {
+			delete(d.pending, key)
+		}
+	}
+	d.pendingCount = len(d.pending)
 	return nil
+}
+
+func (d *demo) processChunkResults(ctx *gowin.Context) {
+	if d.results == nil {
+		return
+	}
+	for i := 0; i < d.uploadBudget; i++ {
+		select {
+		case result := <-d.results:
+			c := result.chunk
+			if c == nil || !d.pending[c.key] {
+				continue
+			}
+			delete(d.pending, c.key)
+			c.node = d.scene.NewNode()
+			d.chunks[c.key] = c
+			d.markChunkDirty(c.key)
+			for _, n := range allNeighborKeys(c.key) {
+				d.markChunkDirty(n)
+			}
+			_ = d.rebuildChunk(ctx, c)
+			atomic.AddUint64(&d.completedChunks, 1)
+			atomic.AddInt64(&d.totalGenNanos, result.elapsed.Nanoseconds())
+		default:
+			return
+		}
+	}
+}
+
+func (d *demo) enqueueChunk(candidate chunkCandidate) {
+	if d.jobs == nil || d.pending[candidate.key] {
+		return
+	}
+	d.pending[candidate.key] = true
+	select {
+	case d.jobs <- chunkJob{key: candidate.key, lod: candidate.lod, dist: candidate.dist}:
+	default:
+		delete(d.pending, candidate.key)
+	}
 }
 
 type chunkCandidate struct {
@@ -488,7 +617,7 @@ func lodForDistance(dist int) int {
 	}
 }
 
-func (d *demo) newChunk(key chunkKey) *chunk {
+func generateChunk(key chunkKey) *chunk {
 	c := &chunk{key: key, dirty: true}
 	for z := 0; z < chunkSize; z++ {
 		for x := 0; x < chunkSize; x++ {
@@ -506,8 +635,6 @@ func (d *demo) newChunk(key chunkKey) *chunk {
 			}
 		}
 	}
-	c.node = d.scene.NewNode()
-	c.node.SetDraw(c.draw)
 	return c
 }
 
@@ -598,6 +725,11 @@ func (d *demo) markChunkDirty(key chunkKey) {
 }
 
 func (d *demo) rebuildChunk(ctx *gowin.Context, c *chunk) error {
+	start := time.Now()
+	defer func() {
+		atomic.AddUint64(&d.rebuiltMeshes, 1)
+		atomic.AddInt64(&d.totalMeshNanos, time.Since(start).Nanoseconds())
+	}()
 	data := d.buildChunkMesh(c)
 	if len(data.Vertices) == 0 || len(data.Indices) == 0 {
 		if c.mesh != nil {
@@ -624,6 +756,9 @@ func (d *demo) rebuildChunk(ctx *gowin.Context, c *chunk) error {
 		Uniforms: gowin.Uniforms{
 			"u_Ambient":        float32(0.38),
 			"u_LightDirection": gowin.Vec3{X: -0.45, Y: 0.8, Z: 0.35},
+			"u_FogStart":       float32(120),
+			"u_FogEnd":         float32(420),
+			"u_FogColor":       color.NRGBA{R: 92, G: 134, B: 172, A: 245},
 		},
 	})
 	if err != nil {
@@ -1020,10 +1155,10 @@ var cubeFaces = []cubeFace{
 
 func main() {
 	frames := flag.Int("frames", 0, "exit after this many frames; 0 runs interactively")
-	view := flag.Int("view", 9, "maximum chunk radius to consider")
-	vertical := flag.Int("vertical", 5, "vertical chunk radius to consider")
-	drawBudget := flag.Int("draw-budget", 520, "maximum visible chunk draw commands")
-	vertexBudget := flag.Int("vertex-budget", 1200000, "maximum visible mesh vertices")
+	view := flag.Int("view", 16, "maximum chunk radius to consider")
+	vertical := flag.Int("vertical", 8, "vertical chunk radius to consider")
+	drawBudget := flag.Int("draw-budget", 1000, "maximum visible chunk draw commands")
+	vertexBudget := flag.Int("vertex-budget", 2200000, "maximum visible mesh vertices")
 	flag.Parse()
 	err := gowin.Run(&demo{
 		maxFrames:      *frames,

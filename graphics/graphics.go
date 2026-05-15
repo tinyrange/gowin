@@ -9,6 +9,9 @@ import (
 
 // ColorToFloat32 converts a color.Color to RGBA float32 values in the range [0, 1].
 func ColorToFloat32(c color.Color) [4]float32 {
+	if c == nil {
+		return [4]float32{}
+	}
 	r, g, b, a := c.RGBA()
 	// RGBA() returns values in range [0, 0xffff], convert to [0, 1]
 	return [4]float32{

@@ -107,6 +107,12 @@ func (c *Context) Draw(cmd *DrawCommand) {
 	if v, ok := uniformVec3(cmd.uniforms, "u_LightDirection"); ok {
 		light = v.graphics()
 	}
+	fogStart, _ := uniformFloat32(cmd.uniforms, "u_FogStart")
+	fogEnd, _ := uniformFloat32(cmd.uniforms, "u_FogEnd")
+	fogColor := color.Color(nil)
+	if v, ok := uniformColor(cmd.uniforms, "u_FogColor"); ok {
+		fogColor = v
+	}
 
 	model := graphics.Mat4(cmd.transform)
 	if model == (graphics.Mat4{}) {
@@ -120,6 +126,9 @@ func (c *Context) Draw(cmd *DrawCommand) {
 		Shader:         cmd.shader.g3d,
 		Ambient:        ambient,
 		LightDirection: light,
+		FogStart:       fogStart,
+		FogEnd:         fogEnd,
+		FogColor:       fogColor,
 	})
 }
 
@@ -217,5 +226,13 @@ func uniformVec3(uniforms Uniforms, name string) (Vec3, bool) {
 		return Vec3{}, false
 	}
 	v, ok := uniforms[name].(Vec3)
+	return v, ok
+}
+
+func uniformColor(uniforms Uniforms, name string) (color.Color, bool) {
+	if uniforms == nil {
+		return nil, false
+	}
+	v, ok := uniforms[name].(color.Color)
 	return v, ok
 }

@@ -56,6 +56,8 @@ in vec2 a_texCoord;
 in vec4 a_color;
 
 out vec3 v_normal;
+out vec3 v_worldPos;
+out vec3 v_viewPos;
 out vec4 v_color;
 
 uniform mat4 u_model;
@@ -63,26 +65,40 @@ uniform mat4 u_view;
 uniform mat4 u_projection;
 
 void main() {
-	gl_Position = u_projection * u_view * u_model * vec4(a_position, 1.0);
+	vec4 worldPos = u_model * vec4(a_position, 1.0);
+	gl_Position = u_projection * u_view * worldPos;
+	v_worldPos = worldPos.xyz;
+	v_viewPos = (u_view * worldPos).xyz;
 	v_normal = mat3(u_model) * a_normal;
 	v_color = a_color;
 }`
 
 	fragment3DShaderSource = `#version 150
 in vec3 v_normal;
+in vec3 v_worldPos;
+in vec3 v_viewPos;
 in vec4 v_color;
 
 out vec4 fragColor;
 
 uniform vec4 u_lightDirection;
 uniform float u_ambient;
+uniform vec4 u_fogColor;
+uniform float u_fogStart;
+uniform float u_fogEnd;
 
 void main() {
 	vec3 n = normalize(v_normal);
 	vec3 l = normalize(u_lightDirection.xyz);
 	float diffuse = max(dot(n, l), 0.0);
 	float lit = clamp(u_ambient + diffuse * (1.0 - u_ambient), 0.0, 1.0);
-	fragColor = vec4(v_color.rgb * lit, v_color.a);
+	vec4 litColor = vec4(v_color.rgb * lit, v_color.a);
+	if (u_fogEnd > u_fogStart) {
+		float dist = length(v_viewPos);
+		float fog = clamp((dist - u_fogStart) / (u_fogEnd - u_fogStart), 0.0, 1.0);
+		litColor = mix(litColor, u_fogColor, fog * u_fogColor.a);
+	}
+	fragColor = litColor;
 }`
 )
 
@@ -110,6 +126,9 @@ type glWindow struct {
 	projection3DUniform int32
 	light3DUniform      int32
 	ambient3DUniform    int32
+	fogColor3DUniform   int32
+	fogStart3DUniform   int32
+	fogEnd3DUniform     int32
 
 	// Lazily-created 1x1 white texture for callers that pass nil.
 	whiteTex *glTexture
@@ -175,6 +194,9 @@ type glShader3D struct {
 	projectionUniform int32
 	lightUniform      int32
 	ambientUniform    int32
+	fogColorUniform   int32
+	fogStartUniform   int32
+	fogEndUniform     int32
 	w                 *glWindow
 }
 
@@ -275,6 +297,9 @@ func newWithProfile(title string, width, height int, useCoreProfile bool) (Windo
 	w.projection3DUniform = gl.GetUniformLocation(program3D, "u_projection")
 	w.light3DUniform = gl.GetUniformLocation(program3D, "u_lightDirection")
 	w.ambient3DUniform = gl.GetUniformLocation(program3D, "u_ambient")
+	w.fogColor3DUniform = gl.GetUniformLocation(program3D, "u_fogColor")
+	w.fogStart3DUniform = gl.GetUniformLocation(program3D, "u_fogStart")
+	w.fogEnd3DUniform = gl.GetUniformLocation(program3D, "u_fogEnd")
 
 	// Create VAO and VBO
 	var vao, vbo uint32
@@ -810,6 +835,9 @@ func (w *glWindow) NewShader3D(vertexSource, fragmentSource string) (Shader3D, e
 		projectionUniform: w.gl.GetUniformLocation(program, "u_projection"),
 		lightUniform:      w.gl.GetUniformLocation(program, "u_lightDirection"),
 		ambientUniform:    w.gl.GetUniformLocation(program, "u_ambient"),
+		fogColorUniform:   w.gl.GetUniformLocation(program, "u_fogColor"),
+		fogStartUniform:   w.gl.GetUniformLocation(program, "u_fogStart"),
+		fogEndUniform:     w.gl.GetUniformLocation(program, "u_fogEnd"),
 		w:                 w,
 	}, nil
 }
@@ -1036,6 +1064,9 @@ func (f glFrame) RenderMesh3D(mesh Mesh3D, opts Draw3DOptions) {
 	projectionUniform := f.w.projection3DUniform
 	lightUniform := f.w.light3DUniform
 	ambientUniform := f.w.ambient3DUniform
+	fogColorUniform := f.w.fogColor3DUniform
+	fogStartUniform := f.w.fogStart3DUniform
+	fogEndUniform := f.w.fogEnd3DUniform
 	if shader, ok := opts.Shader.(*glShader3D); ok && shader != nil && shader.program != 0 {
 		program = shader.program
 		modelUniform = shader.modelUniform
@@ -1043,6 +1074,9 @@ func (f glFrame) RenderMesh3D(mesh Mesh3D, opts Draw3DOptions) {
 		projectionUniform = shader.projectionUniform
 		lightUniform = shader.lightUniform
 		ambientUniform = shader.ambientUniform
+		fogColorUniform = shader.fogColorUniform
+		fogStartUniform = shader.fogStartUniform
+		fogEndUniform = shader.fogEndUniform
 	}
 
 	f.w.gl.Enable(glpkg.DepthTest)
@@ -1061,6 +1095,16 @@ func (f glFrame) RenderMesh3D(mesh Mesh3D, opts Draw3DOptions) {
 	}
 	if ambientUniform >= 0 {
 		f.w.gl.Uniform1f(ambientUniform, ambient)
+	}
+	if fogColorUniform >= 0 {
+		fog := ColorToFloat32(opts.FogColor)
+		f.w.gl.Uniform4f(fogColorUniform, fog[0], fog[1], fog[2], fog[3])
+	}
+	if fogStartUniform >= 0 {
+		f.w.gl.Uniform1f(fogStartUniform, opts.FogStart)
+	}
+	if fogEndUniform >= 0 {
+		f.w.gl.Uniform1f(fogEndUniform, opts.FogEnd)
 	}
 	f.w.gl.BindVertexArray(m.vao)
 	f.w.gl.DrawElements(glpkg.Triangles, m.indexCount, glpkg.UnsignedInt, 0)
