@@ -557,22 +557,10 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 		d.uploadBudget = 10
 	}
 	needed := map[chunkKey]bool{}
-	candidates := make([]chunkCandidate, 0, (d.viewRadius*2+1)*(d.viewRadius*2+1)*(d.verticalRadius*2+1))
-	for dy := -d.verticalRadius; dy <= d.verticalRadius; dy++ {
-		for dz := -d.viewRadius; dz <= d.viewRadius; dz++ {
-			for dx := -d.viewRadius; dx <= d.viewRadius; dx++ {
-				dist := max(abs(dx), max(abs(dy), abs(dz)))
-				if dist > d.viewRadius {
-					continue
-				}
-				key := chunkKey{X: center.X + dx, Y: center.Y + dy, Z: center.Z + dz}
-				candidates = append(candidates, chunkCandidate{key: key, dist: dist, lod: lodForDistance(dist)})
-			}
-		}
-	}
+	candidates := d.chunkCandidates(center)
 	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].dist != candidates[j].dist {
-			return candidates[i].dist < candidates[j].dist
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score < candidates[j].score
 		}
 		return candidates[i].key.Y < candidates[j].key.Y
 	})
@@ -632,6 +620,48 @@ func (d *demo) streamChunks(ctx *gowin.Context) error {
 	}
 	d.pendingCount = len(d.pending)
 	return nil
+}
+
+func (d *demo) chunkCandidates(center chunkKey) []chunkCandidate {
+	look := d.lookDirection().Normalize()
+	if look == (gowin.Vec3{}) {
+		look = gowin.Vec3{Z: -1}
+	}
+	maxDist := max(d.viewRadius, 64)
+	limit := max(d.drawBudget*4, maxEnqueuePerFrame*8)
+	candidates := make([]chunkCandidate, 0, limit)
+	for dist := 0; len(candidates) < limit && dist <= maxDist; dist++ {
+		for dz := -dist; dz <= dist; dz++ {
+			for dy := -dist; dy <= dist; dy++ {
+				for dx := -dist; dx <= dist; dx++ {
+					if max(abs(dx), max(abs(dy), abs(dz))) != dist {
+						continue
+					}
+					dir := gowin.Vec3{X: float32(dx), Y: float32(dy) * 0.85, Z: float32(dz)}
+					alignment := float32(1)
+					if dir != (gowin.Vec3{}) {
+						alignment = dot3(dir.Normalize(), look)
+					}
+					if dist > 2 && alignment < -0.15 {
+						continue
+					}
+					if dist > d.viewRadius && alignment < 0.52 {
+						continue
+					}
+					if abs(dy) > d.verticalRadius+max(0, dist-d.viewRadius)/2 {
+						continue
+					}
+					key := chunkKey{X: center.X + dx, Y: center.Y + dy, Z: center.Z + dz}
+					score := float32(dist) - alignment*float32(max(dist, 1))*0.55
+					candidates = append(candidates, chunkCandidate{key: key, dist: dist, lod: lodForDistance(dist), score: score})
+					if len(candidates) >= limit {
+						return candidates
+					}
+				}
+			}
+		}
+	}
+	return candidates
 }
 
 func (d *demo) processChunkResults(ctx *gowin.Context) {
@@ -695,9 +725,10 @@ func (d *demo) enqueueChunk(candidate chunkCandidate) bool {
 }
 
 type chunkCandidate struct {
-	key  chunkKey
-	dist int
-	lod  int
+	key   chunkKey
+	dist  int
+	lod   int
+	score float32
 }
 
 func lodForDistance(dist int) int {
@@ -1151,6 +1182,10 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func dot3(a, b gowin.Vec3) float32 {
+	return a.X*b.X + a.Y*b.Y + a.Z*b.Z
 }
 
 func perlinFBM(x, y, z float64, octaves int) float64 {
