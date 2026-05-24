@@ -257,6 +257,12 @@ type InputEvent struct {
 	MouseX float32
 	MouseY float32
 
+	// MouseDeltaX/MouseDeltaY are meaningful for MouseMove events when the
+	// platform reports relative movement. They are especially useful while the
+	// cursor is captured and absolute cursor position no longer changes normally.
+	MouseDeltaX float32
+	MouseDeltaY float32
+
 	// ScrollX/ScrollY are meaningful for Scroll events. Values are in "wheel ticks"
 	// where 1.0 corresponds to a standard mouse wheel notch (platform-dependent).
 	// Existing mouse-wheel callers should continue to use these fields.

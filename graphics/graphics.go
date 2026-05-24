@@ -9,6 +9,9 @@ import (
 
 // ColorToFloat32 converts a color.Color to RGBA float32 values in the range [0, 1].
 func ColorToFloat32(c color.Color) [4]float32 {
+	if c == nil {
+		return [4]float32{}
+	}
 	r, g, b, a := c.RGBA()
 	// RGBA() returns values in range [0, 0xffff], convert to [0, 1]
 	return [4]float32{
@@ -49,6 +52,7 @@ type Frame interface {
 
 	GetKeyState(key window.Key) window.KeyState
 	GetButtonState(button window.Button) window.ButtonState
+	DrainInputEvents() []window.InputEvent
 	// TextInput returns the UTF-8 text entered since the last call to TextInput.
 	TextInput() string
 
@@ -122,6 +126,14 @@ type Window interface {
 	// a conventional right-handed coordinate system; vertex winding is
 	// counter-clockwise when viewed from the front face.
 	NewMesh3D(vertices []Vertex3D, indices []uint32) (Mesh3D, error)
+	// NewShader3D compiles a shader program that can draw Mesh3D resources.
+	//
+	// Custom 3D shaders use the same vertex layout as Mesh3D:
+	// a_position vec3, a_normal vec3, a_texCoord vec2, and a_color vec4.
+	// They may declare u_model, u_view, u_projection, u_lightDirection, and
+	// u_ambient uniforms to receive values from Draw3DOptions. Sampler uniforms
+	// can be populated with Draw3DOptions.Textures.
+	NewShader3D(vertexSource, fragmentSource string) (Shader3D, error)
 
 	SetClear(enabled bool)
 	SetClearColor(color color.Color)

@@ -1,5 +1,7 @@
 package graphics
 
+import "image/color"
+
 // Rect is a logical-pixel rectangle in the top-left origin coordinate space used
 // by Frame drawing methods.
 type Rect struct {
@@ -87,6 +89,13 @@ type Mesh3D interface {
 	Destroy()
 }
 
+// Shader3D is an opaque shader resource created by Window.NewShader3D.
+type Shader3D interface {
+	isShader3D()
+	// Destroy releases the shader program. Destroy is idempotent.
+	Destroy()
+}
+
 type Draw3DOptions struct {
 	// Model places the mesh in world space. Zero value means identity.
 	Model Mat4
@@ -95,11 +104,26 @@ type Draw3DOptions struct {
 	// Projection maps camera coordinates to clip space. Use PerspectiveMat4 or
 	// Ortho3DMat4 for the common cases.
 	Projection Mat4
+	// Shader overrides the built-in lit vertex-color shader. Custom shaders must
+	// use the Mesh3D vertex layout documented on Window.NewShader3D.
+	Shader Shader3D
+	// Textures binds sampler uniforms by name. The built-in 3D shader samples
+	// u_texture and multiplies it by vertex color. When no texture is supplied,
+	// a white texture is bound so vertex-color rendering still works.
+	Textures map[string]Texture
+	// Uniforms sets additional shader uniforms by name. Supported values are
+	// float32/float64/int, Vec3, Mat4, and color.Color.
+	Uniforms map[string]interface{}
 	// Ambient controls minimum light contribution. Zero uses a small default.
 	Ambient float32
 	// LightDirection points from the surface toward the directional light.
 	// Zero uses a camera/front-left default.
 	LightDirection Vec3
+	// FogStart/FogEnd enable distance fog when FogEnd is greater than FogStart.
+	// FogColor defaults to transparent black when nil.
+	FogStart float32
+	FogEnd   float32
+	FogColor color.Color
 	// ClipDepthTest controls whether PushClipMesh3D depth-tests while writing
 	// the stencil clip. The zero value is false, which is the recommended
 	// projected-outline mode for flat surface clipping.

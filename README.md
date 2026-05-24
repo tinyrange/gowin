@@ -17,6 +17,74 @@ go get github.com/tinyrange/gowin
 
 gowin currently targets Go 1.18 and newer.
 
+## High-Level API
+
+The root `github.com/tinyrange/gowin` package provides an XNA/raylib-inspired
+application loop, custom math types, textures built from Go `image.Image`
+values, `image/color` colors, render targets, meshes, prepared draw commands,
+custom 3D shaders, and lightweight scene nodes. It is intended for small apps
+and games that want a friendly API while still being able to move hot rendering
+paths into persistent mesh and draw-command data.
+
+```go
+package main
+
+import (
+	"image/color"
+
+	"github.com/tinyrange/gowin"
+)
+
+type Game struct {
+	mesh  *gowin.Mesh
+	draw  *gowin.DrawCommand
+	atlas gowin.Texture2D
+}
+
+func (g *Game) Init(ctx *gowin.Context) error {
+	atlas, err := gowin.LoadTexture(ctx, atlasReader)
+	if err != nil {
+		return err
+	}
+	g.atlas = atlas
+
+	g.mesh = ctx.NewMesh()
+	if err := g.mesh.SetData(myMeshData()); err != nil {
+		return err
+	}
+
+	draw, err := ctx.PrepareDraw(g.mesh, gowin.DrawOptions{
+		Shader: gowin.DefaultShader3D(),
+		Textures: map[string]gowin.Texture2D{
+			"u_texture": g.atlas,
+		},
+		Uniforms: gowin.Uniforms{
+			"u_Ambient": 0.35,
+		},
+	})
+	g.draw = draw
+	return err
+}
+
+func (g *Game) Update(ctx *gowin.Context, dt float32) error { return nil }
+
+func (g *Game) Draw(ctx *gowin.Context) error {
+	ctx.Begin3D(gowin.Camera3D{Position: gowin.Vec3{Z: 5}, Up: gowin.Vec3{Y: 1}})
+	ctx.Draw(g.draw)
+	ctx.End3D()
+	ctx.DrawText("hello gowin", 16, 24, 16, color.White)
+	return nil
+}
+```
+
+Root-package conveniences include `LoadImage`, `Context.NewTexture`,
+`LoadTexture`, `Context.NewRenderTarget2D`, `Context.DrawTo`, `LoadShader`,
+`Context.DrawScene`, `Mesh.Destroy`, and `Context.WriteScreenshotPNG`. Prepared
+draw commands can bind texture samplers by uniform name and pass common shader
+uniform values. See `examples/draw_commands` for a complete draw command example
+and `examples/voxel` for a streaming editable voxel world demo with a generated
+block texture atlas.
+
 ## Packages
 
 - `github.com/tinyrange/gowin/window`: native windows, input, clipboard, file
@@ -63,6 +131,8 @@ More examples live in `examples/`:
 ```sh
 go run ./examples/screenshot
 go run ./examples/preview3d
+go run ./examples/draw_commands
+go run ./examples/voxel
 ```
 
 ## Platform Notes
