@@ -3,6 +3,7 @@
 package window
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"runtime"
@@ -146,6 +147,9 @@ var (
 	xDisplayHeight         func(uintptr, int32) int32
 	xDisplayHeightMM       func(uintptr, int32) int32
 	xResourceManagerString func(uintptr) *byte
+	xGetSelectionOwnerCore func(uintptr, uintptr) uintptr
+	xGetWindowPropertyCore func(uintptr, uintptr, uintptr, int64, int64, int32, uintptr, *uintptr, *int32, *uint64, *uint64, *uintptr) int32
+	xFreeCore              func(uintptr) int32
 	xLookupKeysym          func(*xKeyEvent, int32) uint32
 
 	glxChooseVisual            func(uintptr, int32, *int32) *XVisualInfo
@@ -808,9 +812,10 @@ func (w *x11Window) buttonToButton(x11Button uint32) Button {
 // 1. GTK_SCALE environment variable (common on Wayland)
 // 2. GDK_SCALE environment variable (GTK/GNOME)
 // 3. QT_SCALE_FACTOR environment variable (Qt/KDE)
-// 4. Xft.dpi from X resources (set by desktop environments)
-// 5. DPI calculation from DisplayWidth/DisplayWidthMM
-// 6. Default to 1.0 if all methods fail
+// 4. XSettings (used by Xwayland compositors and desktop environments)
+// 5. Xft.dpi from X resources
+// 6. DPI calculation from DisplayWidth/DisplayWidthMM
+// 7. Default to 1.0 if all methods fail
 func calculateScale(dpy uintptr, screen int32) float32 {
 	// Check environment variables first (most reliable on Wayland)
 	if scale := getEnvScale("GTK_SCALE"); scale > 0 {
@@ -820,6 +825,10 @@ func calculateScale(dpy uintptr, screen int32) float32 {
 		return roundScale(scale)
 	}
 	if scale := getEnvScale("QT_SCALE_FACTOR"); scale > 0 {
+		return roundScale(scale)
+	}
+
+	if scale := xSettingsScale(dpy, screen); scale > 0 {
 		return roundScale(scale)
 	}
 
@@ -857,6 +866,111 @@ func calculateScale(dpy uintptr, screen int32) float32 {
 
 	// Default to 1.0 if we can't determine scale
 	return 1.0
+}
+
+func xSettingsScale(dpy uintptr, screen int32) float32 {
+	if xGetSelectionOwnerCore == nil || xGetWindowPropertyCore == nil || xFreeCore == nil {
+		return 0
+	}
+	selection := xInternAtom(dpy, cString("_XSETTINGS_S"+strconv.Itoa(int(screen))), 1)
+	property := xInternAtom(dpy, cString("_XSETTINGS_SETTINGS"), 1)
+	if selection == 0 || property == 0 {
+		return 0
+	}
+	owner := xGetSelectionOwnerCore(dpy, selection)
+	if owner == 0 {
+		return 0
+	}
+
+	var actualType uintptr
+	var actualFormat int32
+	var nItems, bytesAfter uint64
+	var propertyData uintptr
+	if result := xGetWindowPropertyCore(
+		dpy, owner, property, 0, 1024*1024, 0, 0,
+		&actualType, &actualFormat, &nItems, &bytesAfter, &propertyData,
+	); result != 0 || propertyData == 0 || actualFormat != 8 || nItems == 0 {
+		return 0
+	}
+	defer xFreeCore(propertyData)
+
+	data := unsafe.Slice((*byte)(unsafe.Pointer(propertyData)), int(nItems))
+	return parseXSettingsScale(data)
+}
+
+func parseXSettingsScale(data []byte) float32 {
+	if len(data) < 12 {
+		return 0
+	}
+	var order binary.ByteOrder
+	switch data[0] {
+	case 0, 'l':
+		order = binary.LittleEndian
+	case 1, 'B':
+		order = binary.BigEndian
+	default:
+		return 0
+	}
+	settings := int(order.Uint32(data[8:12]))
+	offset := 12
+	var dpiScale, windowScale float32
+	for settingIndex := 0; settingIndex < settings; settingIndex++ {
+		if offset+4 > len(data) {
+			return 0
+		}
+		valueType := data[offset]
+		nameLength := int(order.Uint16(data[offset+2 : offset+4]))
+		offset += 4
+		if nameLength < 0 || offset+nameLength > len(data) {
+			return 0
+		}
+		name := string(data[offset : offset+nameLength])
+		offset = (offset + nameLength + 3) &^ 3
+		if offset+4 > len(data) {
+			return 0
+		}
+		offset += 4 // last-change serial
+
+		switch valueType {
+		case 0:
+			if offset+4 > len(data) {
+				return 0
+			}
+			value := int32(order.Uint32(data[offset : offset+4]))
+			offset += 4
+			switch name {
+			case "Xft/DPI":
+				if value > 0 {
+					dpiScale = float32(value) / (96 * 1024)
+				}
+			case "Gdk/WindowScalingFactor":
+				if value > 0 {
+					windowScale = float32(value)
+				}
+			}
+		case 1:
+			if offset+4 > len(data) {
+				return 0
+			}
+			length := int(order.Uint32(data[offset : offset+4]))
+			offset += 4
+			if length < 0 || offset+length > len(data) {
+				return 0
+			}
+			offset = (offset + length + 3) &^ 3
+		case 2:
+			if offset+8 > len(data) {
+				return 0
+			}
+			offset += 8
+		default:
+			return 0
+		}
+	}
+	if dpiScale > 0 {
+		return dpiScale
+	}
+	return windowScale
 }
 
 // parseXftDPI extracts Xft.dpi value from X resource manager string
@@ -1037,6 +1151,9 @@ func registerX11() {
 	purego.RegisterLibFunc(&xDisplayWidthMM, x11lib, "XDisplayWidthMM")
 	purego.RegisterLibFunc(&xDisplayHeight, x11lib, "XDisplayHeight")
 	purego.RegisterLibFunc(&xDisplayHeightMM, x11lib, "XDisplayHeightMM")
+	purego.RegisterLibFunc(&xGetSelectionOwnerCore, x11lib, "XGetSelectionOwner")
+	purego.RegisterLibFunc(&xGetWindowPropertyCore, x11lib, "XGetWindowProperty")
+	purego.RegisterLibFunc(&xFreeCore, x11lib, "XFree")
 	// Try to register XResourceManagerString, but don't fail if it's not available
 	if _, err := purego.Dlsym(x11lib, "XResourceManagerString"); err == nil {
 		purego.RegisterLibFunc(&xResourceManagerString, x11lib, "XResourceManagerString")
