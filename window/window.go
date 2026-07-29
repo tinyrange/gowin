@@ -49,6 +49,19 @@ type IntegratedTitleBarSupport interface {
 	BeginWindowDrag() bool
 }
 
+// SharedOpenGLContext owns an OpenGL context on a dedicated OS thread.
+// Calls to Run are serialized and execute with that context current.
+type SharedOpenGLContext interface {
+	Run(func(gl.OpenGL) error) error
+	Close() error
+}
+
+// SharedOpenGLContextProvider is an optional window capability for creating GL
+// contexts in the window's resource share group.
+type SharedOpenGLContextProvider interface {
+	NewSharedOpenGLContext() (SharedOpenGLContext, error)
+}
+
 // DockMenuItem represents an item in the dock menu (macOS only)
 type DockMenuItem struct {
 	Title     string

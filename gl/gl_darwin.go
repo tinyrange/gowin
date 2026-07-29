@@ -93,6 +93,12 @@ type openGL struct {
 
 	// Texture cleanup
 	deleteTextures func(int32, *uint32)
+
+	// Cross-context synchronization
+	fenceSync  func(uint32, uint32) uintptr
+	waitSync   func(uintptr, uint32, uint64)
+	deleteSync func(uintptr)
+	flush      func()
 }
 
 func (gl *openGL) ClearColor(r, g, b, a float32) {
@@ -383,6 +389,22 @@ func (gl *openGL) DeleteTextures(n int32, textures *uint32) {
 	gl.deleteTextures(n, textures)
 }
 
+func (gl *openGL) FenceSync(condition, flags uint32) Sync {
+	return Sync(gl.fenceSync(condition, flags))
+}
+
+func (gl *openGL) WaitSync(sync Sync, flags uint32, timeout uint64) {
+	gl.waitSync(uintptr(sync), flags, timeout)
+}
+
+func (gl *openGL) DeleteSync(sync Sync) {
+	gl.deleteSync(uintptr(sync))
+}
+
+func (gl *openGL) Flush() {
+	gl.flush()
+}
+
 func Load() (OpenGL, error) {
 	handle, err := purego.Dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL", purego.RTLD_GLOBAL|purego.RTLD_LAZY)
 	if err != nil {
@@ -467,6 +489,12 @@ func Load() (OpenGL, error) {
 
 	// Texture cleanup
 	register(&gl.deleteTextures, "glDeleteTextures")
+
+	// Cross-context synchronization
+	register(&gl.fenceSync, "glFenceSync")
+	register(&gl.waitSync, "glWaitSync")
+	register(&gl.deleteSync, "glDeleteSync")
+	register(&gl.flush, "glFlush")
 
 	return gl, nil
 }
