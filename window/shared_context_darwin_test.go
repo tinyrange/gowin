@@ -20,6 +20,14 @@ func TestSharedOpenGLContextPublishesTexture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer win.Close()
+	shareProvider, ok := win.(OpenGLShareGroupProvider)
+	if !ok {
+		t.Fatal("window does not expose its OpenGL share group")
+	}
+	context, pixelFormat := shareProvider.OpenGLShareGroup()
+	if context == 0 || pixelFormat == 0 {
+		t.Fatal("window exposes an incomplete OpenGL share group")
+	}
 	api, err := win.GL()
 	if err != nil {
 		t.Fatal(err)

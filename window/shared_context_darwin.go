@@ -24,6 +24,15 @@ type darwinSharedOpenGLContext struct {
 	closeOnce sync.Once
 }
 
+func (c *Cocoa) OpenGLShareGroup() (context, pixelFormat uintptr) {
+	c.sharedMu.Lock()
+	defer c.sharedMu.Unlock()
+	if c.closing {
+		return 0, 0
+	}
+	return uintptr(c.ctx), uintptr(c.pixelFormat)
+}
+
 func (c *Cocoa) NewSharedOpenGLContext() (SharedOpenGLContext, error) {
 	c.sharedMu.Lock()
 	if c.closing || c.ctx == 0 || c.pixelFormat == 0 {

@@ -62,6 +62,14 @@ type SharedOpenGLContextProvider interface {
 	NewSharedOpenGLContext() (SharedOpenGLContext, error)
 }
 
+// OpenGLShareGroupProvider exposes opaque native context and pixel-format
+// tokens that a renderer can use only while creating another context in this
+// window's share group. The tokens are backend-specific and remain owned by
+// the window.
+type OpenGLShareGroupProvider interface {
+	OpenGLShareGroup() (context, pixelFormat uintptr)
+}
+
 // DockMenuItem represents an item in the dock menu (macOS only)
 type DockMenuItem struct {
 	Title     string
