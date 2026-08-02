@@ -26,6 +26,7 @@ const (
 
 	wmClose       = 0x0010
 	wmDestroy     = 0x0002
+	wmKillFocus   = 0x0008
 	wmKeyDown     = 0x0100
 	wmKeyUp       = 0x0101
 	wmSysKeyDown  = 0x0104
@@ -49,6 +50,7 @@ const (
 	whKeyboardLL  = 13
 	hcAction      = 0
 	llkhfExtended = 0x01
+	llkhfAltDown  = 0x20
 
 	// Virtual key codes
 	vkShift    = 0x10
@@ -291,6 +293,7 @@ type winWindow struct {
 	keyboardHook      syscall.Handle
 	running           bool
 	systemKeyCaptured bool
+	hookCapturedKeys  map[Key]bool
 	keyStates         map[Key]KeyState
 	buttonStates      map[Button]ButtonState
 	inputEvents       []InputEvent
@@ -354,13 +357,14 @@ func New(title string, width, height int, useCoreProfile bool) (Window, error) {
 	procUpdateWindow.Call(uintptr(hwd))
 
 	win := &winWindow{
-		hwnd:         hwd,
-		hdc:          hdc,
-		ctx:          ctx,
-		running:      true,
-		keyStates:    make(map[Key]KeyState),
-		buttonStates: make(map[Button]ButtonState),
-		inputEvents:  make([]InputEvent, 0, 256),
+		hwnd:             hwd,
+		hdc:              hdc,
+		ctx:              ctx,
+		running:          true,
+		hookCapturedKeys: make(map[Key]bool),
+		keyStates:        make(map[Key]KeyState),
+		buttonStates:     make(map[Button]ButtonState),
+		inputEvents:      make([]InputEvent, 0, 256),
 	}
 	currentWin = win
 
@@ -400,7 +404,7 @@ func (w *winWindow) SetSystemKeyCaptured(captured bool) {
 			procUnhookWindowsHookEx.Call(uintptr(w.keyboardHook))
 			w.keyboardHook = 0
 		}
-		w.releaseCapturedSystemKeys()
+		w.releaseCapturedKeys()
 		return
 	}
 	if procSetWindowsHookEx.Find() != nil {
@@ -415,14 +419,15 @@ func (w *winWindow) SetSystemKeyCaptured(captured bool) {
 	w.keyboardHook = syscall.Handle(hook)
 }
 
-func (w *winWindow) releaseCapturedSystemKeys() {
-	for _, key := range []Key{KeyLeftSuper, KeyRightSuper} {
-		if !w.GetKeyState(key).IsDown() {
+func (w *winWindow) releaseCapturedKeys() {
+	for key, state := range w.keyStates {
+		if !state.IsDown() {
 			continue
 		}
 		w.inputEvents = append(w.inputEvents, InputEvent{Type: InputEventKeyUp, Key: key})
 		w.keyStates[key] = KeyStateReleased
 	}
+	w.hookCapturedKeys = make(map[Key]bool)
 }
 
 func (w *winWindow) Poll() bool {
@@ -931,6 +936,11 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	case wmDestroy:
 		procPostQuitMessage.Call(0)
 		return 0
+	case wmKillFocus:
+		current := currentWin
+		if current != nil && current.hwnd == syscall.Handle(hwnd) && current.systemKeyCaptured {
+			current.releaseCapturedKeys()
+		}
 	case wmDPIChanged:
 		if lParam != 0 && procSetWindowPos.Find() == nil {
 			suggested := (*rect)(unsafe.Pointer(lParam))
@@ -954,12 +964,29 @@ func windowsKeyboardHook(nCode, wParam, lParam uintptr) uintptr {
 	if int32(nCode) == hcAction && lParam != 0 {
 		win := currentWin
 		hook := (*keyboardLowLevelHook)(unsafe.Pointer(lParam))
-		if win != nil && win.systemKeyCaptured && (hook.vkCode == vkLWin || hook.vkCode == vkRWin) {
+		if win != nil && win.systemKeyCaptured {
 			key := vkToKey(hook.vkCode)
+			if key == KeyUnknown {
+				ret, _, _ := procCallNextHookEx.Call(0, nCode, wParam, lParam)
+				return ret
+			}
 			foreground, _, _ := procGetForegroundWindow.Call()
 			focused := hwnd(foreground) == win.hwnd
-			if focused || win.GetKeyState(key).IsDown() {
-				message := uint32(wParam)
+			message := uint32(wParam)
+			keyDown := message == wmKeyDown || message == wmSysKeyDown
+			keyUp := message == wmKeyUp || message == wmSysKeyUp
+			windowsKey := hook.vkCode == vkLWin || hook.vkCode == vkRWin
+			comboActive := hook.flags&llkhfAltDown != 0 ||
+				win.GetKeyState(KeyLeftAlt).IsDown() ||
+				win.GetKeyState(KeyRightAlt).IsDown() ||
+				win.GetKeyState(KeyLeftSuper).IsDown() ||
+				win.GetKeyState(KeyRightSuper).IsDown()
+			captured := win.hookCapturedKeys[key]
+			if focused && keyDown && (windowsKey || comboActive) {
+				captured = true
+				win.hookCapturedKeys[key] = true
+			}
+			if windowsKey || captured {
 				switch message {
 				case wmKeyDown, wmSysKeyDown, wmKeyUp, wmSysKeyUp:
 					messageLParam := uintptr(hook.scanCode) << 16
@@ -974,6 +1001,9 @@ func windowsKeyboardHook(nCode, wParam, lParam uintptr) uintptr {
 						wParam:  uintptr(hook.vkCode),
 						lParam:  messageLParam,
 					})
+					if keyUp {
+						delete(win.hookCapturedKeys, key)
+					}
 					if focused {
 						return 1
 					}

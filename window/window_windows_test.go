@@ -51,3 +51,34 @@ func TestLogicalPixelsToPhysicalUsesDisplayDPI(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseCapturedKeysReleasesEveryHeldKey(t *testing.T) {
+	w := &winWindow{
+		keyStates: map[Key]KeyState{
+			KeyA:           KeyStateDown,
+			KeyLeftAlt:     KeyStatePressed,
+			KeyLeftControl: KeyStateRepeated,
+			KeyLeftSuper:   KeyStateDown,
+			KeyB:           KeyStateUp,
+		},
+	}
+
+	w.releaseCapturedKeys()
+
+	for _, key := range []Key{KeyA, KeyLeftAlt, KeyLeftControl, KeyLeftSuper} {
+		if state := w.keyStates[key]; state != KeyStateReleased {
+			t.Errorf("key %v state = %v, want released", key, state)
+		}
+	}
+	if state := w.keyStates[KeyB]; state != KeyStateUp {
+		t.Errorf("unheld key state = %v, want up", state)
+	}
+	if len(w.inputEvents) != 4 {
+		t.Fatalf("release events = %d, want 4", len(w.inputEvents))
+	}
+	for _, event := range w.inputEvents {
+		if event.Type != InputEventKeyUp {
+			t.Errorf("event type = %v, want key up", event.Type)
+		}
+	}
+}
