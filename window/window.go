@@ -25,6 +25,12 @@ type CursorCaptureSupport interface {
 	SetCursorCaptured(captured bool)
 }
 
+// SystemKeyCaptureSupport lets an application keep operating-system shortcut
+// keys in the focused window instead of handing them to the host desktop.
+type SystemKeyCaptureSupport interface {
+	SetSystemKeyCaptured(captured bool)
+}
+
 // DockMenuItem represents an item in the dock menu (macOS only)
 type DockMenuItem struct {
 	Title     string

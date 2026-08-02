@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -40,7 +41,14 @@ const (
 	wmMouseWheel  = 0x020A
 	wmXButtonDown = 0x020B
 	wmXButtonUp   = 0x020C
+	wmDPIChanged  = 0x02E0
 	pmRemove      = 0x0001
+
+	swpNoZOrder   = 0x0004
+	swpNoActivate = 0x0010
+	whKeyboardLL  = 13
+	hcAction      = 0
+	llkhfExtended = 0x01
 
 	// Virtual key codes
 	vkShift    = 0x10
@@ -111,6 +119,14 @@ type msg struct {
 	lPrivate uint32
 }
 
+type keyboardLowLevelHook struct {
+	vkCode    uint32
+	scanCode  uint32
+	flags     uint32
+	time      uint32
+	extraInfo uintptr
+}
+
 type point struct {
 	x int32
 	y int32
@@ -159,26 +175,35 @@ var (
 	opengl32 = syscall.NewLazyDLL("opengl32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 
-	procRegisterClassEx  = user32.NewProc("RegisterClassExW")
-	procCreateWindowEx   = user32.NewProc("CreateWindowExW")
-	procDefWindowProc    = user32.NewProc("DefWindowProcW")
-	procDestroyWindow    = user32.NewProc("DestroyWindow")
-	procShowWindow       = user32.NewProc("ShowWindow")
-	procGetClientRect    = user32.NewProc("GetClientRect")
-	procPeekMessage      = user32.NewProc("PeekMessageW")
-	procTranslateMessage = user32.NewProc("TranslateMessage")
-	procDispatchMessage  = user32.NewProc("DispatchMessageW")
-	procPostQuitMessage  = user32.NewProc("PostQuitMessage")
-	procGetDC            = user32.NewProc("GetDC")
-	procReleaseDC        = user32.NewProc("ReleaseDC")
-	procGetCursorPos     = user32.NewProc("GetCursorPos")
-	procScreenToClient   = user32.NewProc("ScreenToClient")
-	procUpdateWindow     = user32.NewProc("UpdateWindow")
-	procWindowFromDC     = user32.NewProc("WindowFromDC")
-	procLoadCursor       = user32.NewProc("LoadCursorW")
-	procGetDpiForWindow  = user32.NewProc("GetDpiForWindow")
-	procGetAsyncKeyState = user32.NewProc("GetAsyncKeyState")
-	procMapVirtualKey    = user32.NewProc("MapVirtualKeyW")
+	procRegisterClassEx               = user32.NewProc("RegisterClassExW")
+	procCreateWindowEx                = user32.NewProc("CreateWindowExW")
+	procDefWindowProc                 = user32.NewProc("DefWindowProcW")
+	procDestroyWindow                 = user32.NewProc("DestroyWindow")
+	procShowWindow                    = user32.NewProc("ShowWindow")
+	procGetClientRect                 = user32.NewProc("GetClientRect")
+	procPeekMessage                   = user32.NewProc("PeekMessageW")
+	procTranslateMessage              = user32.NewProc("TranslateMessage")
+	procDispatchMessage               = user32.NewProc("DispatchMessageW")
+	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
+	procGetDC                         = user32.NewProc("GetDC")
+	procReleaseDC                     = user32.NewProc("ReleaseDC")
+	procGetCursorPos                  = user32.NewProc("GetCursorPos")
+	procScreenToClient                = user32.NewProc("ScreenToClient")
+	procUpdateWindow                  = user32.NewProc("UpdateWindow")
+	procWindowFromDC                  = user32.NewProc("WindowFromDC")
+	procLoadCursor                    = user32.NewProc("LoadCursorW")
+	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
+	procGetDpiForSystem               = user32.NewProc("GetDpiForSystem")
+	procGetAsyncKeyState              = user32.NewProc("GetAsyncKeyState")
+	procSetProcessDPIAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	procSetProcessDPIAware            = user32.NewProc("SetProcessDPIAware")
+	procAdjustWindowRectExForDPI      = user32.NewProc("AdjustWindowRectExForDpi")
+	procAdjustWindowRectEx            = user32.NewProc("AdjustWindowRectEx")
+	procSetWindowPos                  = user32.NewProc("SetWindowPos")
+	procSetWindowsHookEx              = user32.NewProc("SetWindowsHookExW")
+	procUnhookWindowsHookEx           = user32.NewProc("UnhookWindowsHookEx")
+	procCallNextHookEx                = user32.NewProc("CallNextHookEx")
+	procGetForegroundWindow           = user32.NewProc("GetForegroundWindow")
 
 	procChoosePixelFormat   = gdi32.NewProc("ChoosePixelFormat")
 	procDescribePixelFormat = gdi32.NewProc("DescribePixelFormat")
@@ -237,6 +262,9 @@ var (
 	windowClass     = syscall.StringToUTF16Ptr(windowClassName)
 
 	currentWin *winWindow
+	dpiOnce    sync.Once
+
+	windowsKeyboardHookCallback = syscall.NewCallback(windowsKeyboardHook)
 )
 
 func lastError() syscall.Errno {
@@ -257,18 +285,21 @@ func winErr(op string) error {
 }
 
 type winWindow struct {
-	hwnd         hwnd
-	hdc          hdc
-	ctx          hglrc
-	running      bool
-	keyStates    map[Key]KeyState
-	buttonStates map[Button]ButtonState
-	inputEvents  []InputEvent
-	textInput    string
+	hwnd              hwnd
+	hdc               hdc
+	ctx               hglrc
+	keyboardHook      syscall.Handle
+	running           bool
+	systemKeyCaptured bool
+	keyStates         map[Key]KeyState
+	buttonStates      map[Button]ButtonState
+	inputEvents       []InputEvent
+	textInput         string
 }
 
 func New(title string, width, height int, useCoreProfile bool) (Window, error) {
 	runtime.LockOSThread()
+	enableDPIAwareness()
 
 	if unsafe.Sizeof(pixelFormatDescriptor{}) != 40 {
 		runtime.UnlockOSThread()
@@ -341,6 +372,7 @@ func (w *winWindow) GL() (gl.OpenGL, error) {
 }
 
 func (w *winWindow) Close() {
+	w.SetSystemKeyCaptured(false)
 	if w.ctx != 0 {
 		procWglMakeCurrent.Call(uintptr(w.hdc), 0)
 		procWglDeleteContext.Call(uintptr(w.ctx))
@@ -356,6 +388,41 @@ func (w *winWindow) Close() {
 	}
 	w.running = false
 	runtime.UnlockOSThread()
+}
+
+func (w *winWindow) SetSystemKeyCaptured(captured bool) {
+	if w.systemKeyCaptured == captured {
+		return
+	}
+	w.systemKeyCaptured = captured
+	if !captured {
+		if w.keyboardHook != 0 {
+			procUnhookWindowsHookEx.Call(uintptr(w.keyboardHook))
+			w.keyboardHook = 0
+		}
+		w.releaseCapturedSystemKeys()
+		return
+	}
+	if procSetWindowsHookEx.Find() != nil {
+		return
+	}
+	hook, _, _ := procSetWindowsHookEx.Call(
+		whKeyboardLL,
+		windowsKeyboardHookCallback,
+		uintptr(moduleHandle()),
+		0,
+	)
+	w.keyboardHook = syscall.Handle(hook)
+}
+
+func (w *winWindow) releaseCapturedSystemKeys() {
+	for _, key := range []Key{KeyLeftSuper, KeyRightSuper} {
+		if !w.GetKeyState(key).IsDown() {
+			continue
+		}
+		w.inputEvents = append(w.inputEvents, InputEvent{Type: InputEventKeyUp, Key: key})
+		w.keyStates[key] = KeyStateReleased
+	}
 }
 
 func (w *winWindow) Poll() bool {
@@ -501,6 +568,27 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	titlePtr, _ := syscall.UTF16PtrFromString(title)
 
 	style := uint32(wsOverlappedWindow | wsClipSiblings | wsClipChildren)
+	dpi := systemDPI()
+	windowRect := rect{
+		right:  logicalPixelsToPhysical(width, dpi),
+		bottom: logicalPixelsToPhysical(height, dpi),
+	}
+	if procAdjustWindowRectExForDPI.Find() == nil {
+		procAdjustWindowRectExForDPI.Call(
+			uintptr(unsafe.Pointer(&windowRect)),
+			uintptr(style),
+			0,
+			0,
+			uintptr(dpi),
+		)
+	} else if procAdjustWindowRectEx.Find() == nil {
+		procAdjustWindowRectEx.Call(
+			uintptr(unsafe.Pointer(&windowRect)),
+			uintptr(style),
+			0,
+			0,
+		)
+	}
 
 	clearLastError()
 	ret, _, _ := procCreateWindowEx.Call(
@@ -510,8 +598,8 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 		uintptr(style),
 		cwUseDefault,
 		cwUseDefault,
-		uintptr(width),
-		uintptr(height),
+		uintptr(windowRect.right-windowRect.left),
+		uintptr(windowRect.bottom-windowRect.top),
 		0,
 		0,
 		uintptr(moduleHandle()),
@@ -530,6 +618,46 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	}
 
 	return win, hdc(dcRet), nil
+}
+
+func logicalPixelsToPhysical(value int, dpi uint32) int32 {
+	return int32((int64(value)*int64(dpi) + 48) / 96)
+}
+
+func enableDPIAwareness() {
+	dpiOnce.Do(func() {
+		if procSetProcessDPIAwarenessContext.Find() == nil {
+			// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is the pseudo-handle -4.
+			procSetProcessDPIAwarenessContext.Call(^uintptr(3))
+			return
+		}
+		if procSetProcessDPIAware.Find() == nil {
+			procSetProcessDPIAware.Call()
+		}
+	})
+}
+
+func systemDPI() uint32 {
+	if procGetDpiForSystem.Find() == nil {
+		dpi, _, _ := procGetDpiForSystem.Call()
+		if dpi > 0 {
+			return uint32(dpi)
+		}
+	}
+
+	const logPixelsX = 88
+	hdc, _, _ := procGetDC.Call(0)
+	if hdc != 0 {
+		defer procReleaseDC.Call(0, hdc)
+		procGetDeviceCaps := gdi32.NewProc("GetDeviceCaps")
+		if procGetDeviceCaps.Find() == nil {
+			dpi, _, _ := procGetDeviceCaps.Call(hdc, logPixelsX)
+			if dpi > 0 {
+				return uint32(dpi)
+			}
+		}
+	}
+	return 96
 }
 
 func chooseAndSetPixelFormat(hdc hdc) (int32, pixelFormatDescriptor, error) {
@@ -803,8 +931,57 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	case wmDestroy:
 		procPostQuitMessage.Call(0)
 		return 0
+	case wmDPIChanged:
+		if lParam != 0 && procSetWindowPos.Find() == nil {
+			suggested := (*rect)(unsafe.Pointer(lParam))
+			procSetWindowPos.Call(
+				hwnd,
+				0,
+				uintptr(suggested.left),
+				uintptr(suggested.top),
+				uintptr(suggested.right-suggested.left),
+				uintptr(suggested.bottom-suggested.top),
+				swpNoZOrder|swpNoActivate,
+			)
+		}
+		return 0
 	}
 	ret, _, _ := procDefWindowProc.Call(hwnd, msg, wParam, lParam)
+	return ret
+}
+
+func windowsKeyboardHook(nCode, wParam, lParam uintptr) uintptr {
+	if int32(nCode) == hcAction && lParam != 0 {
+		win := currentWin
+		hook := (*keyboardLowLevelHook)(unsafe.Pointer(lParam))
+		if win != nil && win.systemKeyCaptured && (hook.vkCode == vkLWin || hook.vkCode == vkRWin) {
+			key := vkToKey(hook.vkCode)
+			foreground, _, _ := procGetForegroundWindow.Call()
+			focused := hwnd(foreground) == win.hwnd
+			if focused || win.GetKeyState(key).IsDown() {
+				message := uint32(wParam)
+				switch message {
+				case wmKeyDown, wmSysKeyDown, wmKeyUp, wmSysKeyUp:
+					messageLParam := uintptr(hook.scanCode) << 16
+					if hook.flags&llkhfExtended != 0 {
+						messageLParam |= 1 << 24
+					}
+					if (message == wmKeyDown || message == wmSysKeyDown) && win.GetKeyState(key).IsDown() {
+						messageLParam |= 1 << 30
+					}
+					win.processMessage(&msg{
+						message: message,
+						wParam:  uintptr(hook.vkCode),
+						lParam:  messageLParam,
+					})
+					if focused {
+						return 1
+					}
+				}
+			}
+		}
+	}
+	ret, _, _ := procCallNextHookEx.Call(0, nCode, wParam, lParam)
 	return ret
 }
 
@@ -826,7 +1003,7 @@ func (w *winWindow) processMessage(m *msg) {
 	switch m.message {
 	case wmKeyDown, wmSysKeyDown:
 		vk := uint32(m.wParam)
-		key := vkToKey(vk)
+		key := windowsMessageKey(vk, m.lParam)
 		if key == KeyUnknown {
 			return
 		}
@@ -851,7 +1028,7 @@ func (w *winWindow) processMessage(m *msg) {
 
 	case wmKeyUp, wmSysKeyUp:
 		vk := uint32(m.wParam)
-		key := vkToKey(vk)
+		key := windowsMessageKey(vk, m.lParam)
 		if key == KeyUnknown {
 			return
 		}
@@ -1039,6 +1216,36 @@ func mouseEventPoint(lParam uintptr) (float32, float32) {
 	x := int16(lParam & 0xffff)
 	y := int16((lParam >> 16) & 0xffff)
 	return float32(x), float32(y)
+}
+
+func windowsMessageKey(vk uint32, lParam uintptr) Key {
+	const (
+		extendedKeyFlag = uintptr(1 << 24)
+		rightShiftScan  = uintptr(0x36)
+	)
+	scanCode := (lParam >> 16) & 0xff
+	extended := lParam&extendedKeyFlag != 0
+	switch vk {
+	case vkShift:
+		if scanCode == rightShiftScan {
+			vk = vkRShift
+		} else {
+			vk = vkLShift
+		}
+	case vkControl:
+		if extended {
+			vk = vkRControl
+		} else {
+			vk = vkLControl
+		}
+	case vkMenu:
+		if extended {
+			vk = vkRMenu
+		} else {
+			vk = vkLMenu
+		}
+	}
+	return vkToKey(vk)
 }
 
 // vkToKey converts a Windows virtual key code to our Key enum.
@@ -1275,26 +1482,5 @@ func vkToKey(vk uint32) Key {
 // getDisplayScale returns the display scale factor.
 // Uses GetDpiForSystem for Windows 10 1607+ or falls back to 1.0.
 func getDisplayScale() float32 {
-	shcore := syscall.NewLazyDLL("shcore.dll")
-	procGetDpiForMonitor := shcore.NewProc("GetDpiForMonitor")
-
-	// Try GetDpiForSystem first (Windows 10 1607+)
-	if procGetDpiForMonitor.Find() == nil {
-		// We need a monitor handle, so we'll use the primary monitor
-		// For simplicity, use GetDC(NULL) approach
-		hdc, _, _ := procGetDC.Call(0)
-		if hdc != 0 {
-			defer procReleaseDC.Call(0, hdc)
-			// LOGPIXELSX = 88
-			gdi32 := syscall.NewLazyDLL("gdi32.dll")
-			procGetDeviceCaps := gdi32.NewProc("GetDeviceCaps")
-			if procGetDeviceCaps.Find() == nil {
-				dpi, _, _ := procGetDeviceCaps.Call(hdc, 88)
-				if dpi > 0 {
-					return float32(dpi) / 96.0
-				}
-			}
-		}
-	}
-	return 1.0
+	return float32(systemDPI()) / 96.0
 }

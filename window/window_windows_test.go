@@ -1,0 +1,53 @@
+//go:build windows
+
+package window
+
+import "testing"
+
+func TestWindowsMessageKeyResolvesGenericModifiers(t *testing.T) {
+	tests := []struct {
+		name   string
+		vk     uint32
+		scan   uintptr
+		extend bool
+		want   Key
+	}{
+		{name: "left shift", vk: vkShift, scan: 0x2a, want: KeyLeftShift},
+		{name: "right shift", vk: vkShift, scan: 0x36, want: KeyRightShift},
+		{name: "left control", vk: vkControl, scan: 0x1d, want: KeyLeftControl},
+		{name: "right control", vk: vkControl, scan: 0x1d, extend: true, want: KeyRightControl},
+		{name: "left alt", vk: vkMenu, scan: 0x38, want: KeyLeftAlt},
+		{name: "right alt", vk: vkMenu, scan: 0x38, extend: true, want: KeyRightAlt},
+		{name: "left windows", vk: vkLWin, scan: 0x5b, extend: true, want: KeyLeftSuper},
+		{name: "right windows", vk: vkRWin, scan: 0x5c, extend: true, want: KeyRightSuper},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lParam := test.scan << 16
+			if test.extend {
+				lParam |= 1 << 24
+			}
+			if got := windowsMessageKey(test.vk, lParam); got != test.want {
+				t.Fatalf("windowsMessageKey(%#x, %#x) = %v, want %v", test.vk, lParam, got, test.want)
+			}
+		})
+	}
+}
+
+func TestLogicalPixelsToPhysicalUsesDisplayDPI(t *testing.T) {
+	tests := []struct {
+		logical int
+		dpi     uint32
+		want    int32
+	}{
+		{logical: 1440, dpi: 96, want: 1440},
+		{logical: 1440, dpi: 120, want: 1800},
+		{logical: 1440, dpi: 144, want: 2160},
+	}
+	for _, test := range tests {
+		if got := logicalPixelsToPhysical(test.logical, test.dpi); got != test.want {
+			t.Errorf("logicalPixelsToPhysical(%d, %d) = %d, want %d", test.logical, test.dpi, got, test.want)
+		}
+	}
+}
