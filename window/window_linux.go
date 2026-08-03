@@ -6,13 +6,52 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
 	"github.com/tinyrange/gowin/gl"
 )
+
+// ShowOpenPanel implements FileDialogSupport using the native picker supplied
+// by the active Linux desktop. GTK's zenity is preferred, with KDE's kdialog
+// and yad as compatible fallbacks.
+func (w *x11Window) ShowOpenPanel(dialogType FileDialogType, allowedExtensions []string) string {
+	var candidates [][]string
+	switch dialogType {
+	case FileDialogTypeDirectory:
+		candidates = [][]string{
+			{"zenity", "--file-selection", "--directory", "--title=Select folder"},
+			{"kdialog", "--getexistingdirectory", os.Getenv("HOME"), "--title", "Select folder"},
+			{"yad", "--file-selection", "--directory", "--title=Select folder"},
+		}
+	case FileDialogTypeFile:
+		zenity := []string{"zenity", "--file-selection", "--title=Select file"}
+		yad := []string{"yad", "--file-selection", "--title=Select file"}
+		if len(allowedExtensions) != 0 {
+			pattern := "*." + strings.Join(allowedExtensions, " *.")
+			zenity = append(zenity, "--file-filter="+pattern)
+			yad = append(yad, "--file-filter="+pattern)
+		}
+		candidates = [][]string{zenity, {"kdialog", "--getopenfilename", os.Getenv("HOME")}, yad}
+	default:
+		return ""
+	}
+	for _, candidate := range candidates {
+		if _, err := exec.LookPath(candidate[0]); err != nil {
+			continue
+		}
+		output, err := exec.Command(candidate[0], candidate[1:]...).Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(output))
+	}
+	return ""
+}
 
 const (
 	glxRGBA         = 4

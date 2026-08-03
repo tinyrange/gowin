@@ -52,6 +52,13 @@ const (
 	llkhfExtended = 0x01
 	llkhfAltDown  = 0x20
 
+	coinitApartmentThreaded = 0x2
+	clsctxInprocServer      = 0x1
+	fileOpenPickFolders     = 0x20
+	fileOpenForceFilesystem = 0x40
+	fileOpenPathMustExist   = 0x800
+	sigdnFileSystemPath     = 0x80058000
+
 	// Virtual key codes
 	vkShift    = 0x10
 	vkControl  = 0x11
@@ -141,6 +148,13 @@ type rect struct {
 	bottom int32
 }
 
+type windowsGUID struct {
+	Data1 uint32
+	Data2 uint16
+	Data3 uint16
+	Data4 [8]byte
+}
+
 // Mirrors PIXELFORMATDESCRIPTOR (must be 40 bytes).
 type pixelFormatDescriptor struct {
 	nSize           uint16
@@ -176,6 +190,7 @@ var (
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 	opengl32 = syscall.NewLazyDLL("opengl32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	ole32    = syscall.NewLazyDLL("ole32.dll")
 
 	procRegisterClassEx               = user32.NewProc("RegisterClassExW")
 	procCreateWindowEx                = user32.NewProc("CreateWindowExW")
@@ -219,9 +234,13 @@ var (
 	procWglDeleteContext  = opengl32.NewProc("wglDeleteContext")
 	procWglGetProcAddress = opengl32.NewProc("wglGetProcAddress")
 
-	procGetModuleHandle = kernel32.NewProc("GetModuleHandleW")
-	procSetLastError    = kernel32.NewProc("SetLastError")
-	procGetLastError    = kernel32.NewProc("GetLastError")
+	procGetModuleHandle  = kernel32.NewProc("GetModuleHandleW")
+	procSetLastError     = kernel32.NewProc("SetLastError")
+	procGetLastError     = kernel32.NewProc("GetLastError")
+	procCoInitializeEx   = ole32.NewProc("CoInitializeEx")
+	procCoUninitialize   = ole32.NewProc("CoUninitialize")
+	procCoCreateInstance = ole32.NewProc("CoCreateInstance")
+	procCoTaskMemFree    = ole32.NewProc("CoTaskMemFree")
 )
 
 func mustFindProc(p *syscall.LazyProc) error {
@@ -1020,6 +1039,88 @@ func loadCursor() syscall.Handle {
 	clearLastError()
 	ret, _, _ := procLoadCursor.Call(0, uintptr(idcArrow))
 	return syscall.Handle(ret)
+}
+
+// ShowOpenPanel implements FileDialogSupport with Windows' modern shell file
+// dialog. Directory selection uses FOS_PICKFOLDERS rather than the legacy
+// SHBrowseForFolder dialog.
+func (w *winWindow) ShowOpenPanel(dialogType FileDialogType, allowedExtensions []string) string {
+	initialized := false
+	if result, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded); int32(result) >= 0 {
+		initialized = true
+		defer procCoUninitialize.Call()
+	}
+	if !initialized {
+		return ""
+	}
+
+	classFileOpenDialog := windowsGUID{
+		Data1: 0xdc1c5a9c, Data2: 0xe88a, Data3: 0x4dde,
+		Data4: [8]byte{0xa5, 0xa1, 0x60, 0xf8, 0x2a, 0x20, 0xae, 0xf7},
+	}
+	interfaceFileOpenDialog := windowsGUID{
+		Data1: 0xd57c7288, Data2: 0xd4ad, Data3: 0x4768,
+		Data4: [8]byte{0xbe, 0x02, 0x9d, 0x96, 0x95, 0x32, 0xd9, 0x60},
+	}
+	var dialog uintptr
+	result, _, _ := procCoCreateInstance.Call(
+		uintptr(unsafe.Pointer(&classFileOpenDialog)), 0, clsctxInprocServer,
+		uintptr(unsafe.Pointer(&interfaceFileOpenDialog)), uintptr(unsafe.Pointer(&dialog)),
+	)
+	if int32(result) < 0 || dialog == 0 {
+		return ""
+	}
+	defer windowsCOMCall(dialog, 2)
+
+	var options uint32
+	if result := windowsCOMCall(dialog, 10, uintptr(unsafe.Pointer(&options))); int32(result) < 0 {
+		return ""
+	}
+	options |= fileOpenForceFilesystem | fileOpenPathMustExist
+	if dialogType == FileDialogTypeDirectory {
+		options |= fileOpenPickFolders
+	}
+	if result := windowsCOMCall(dialog, 9, uintptr(options)); int32(result) < 0 {
+		return ""
+	}
+	if result := windowsCOMCall(dialog, 3, uintptr(w.hwnd)); int32(result) < 0 {
+		return ""
+	}
+
+	var item uintptr
+	if result := windowsCOMCall(dialog, 20, uintptr(unsafe.Pointer(&item))); int32(result) < 0 || item == 0 {
+		return ""
+	}
+	defer windowsCOMCall(item, 2)
+	var pathPointer uintptr
+	if result := windowsCOMCall(item, 5, sigdnFileSystemPath, uintptr(unsafe.Pointer(&pathPointer))); int32(result) < 0 || pathPointer == 0 {
+		return ""
+	}
+	defer procCoTaskMemFree.Call(pathPointer)
+	return windowsUTF16PointerString(pathPointer)
+}
+
+func windowsCOMCall(object uintptr, method int, args ...uintptr) uintptr {
+	vtable := *(*uintptr)(unsafe.Pointer(object))
+	function := *(*uintptr)(unsafe.Pointer(vtable + uintptr(method)*unsafe.Sizeof(uintptr(0))))
+	arguments := make([]uintptr, 1, len(args)+1)
+	arguments[0] = object
+	arguments = append(arguments, args...)
+	result, _, _ := syscall.SyscallN(function, arguments...)
+	return result
+}
+
+func windowsUTF16PointerString(pointer uintptr) string {
+	if pointer == 0 {
+		return ""
+	}
+	const maximumPathCharacters = 32768
+	characters := unsafe.Slice((*uint16)(unsafe.Pointer(pointer)), maximumPathCharacters)
+	length := 0
+	for length < len(characters) && characters[length] != 0 {
+		length++
+	}
+	return syscall.UTF16ToString(characters[:length])
 }
 
 func moduleHandle() syscall.Handle {
