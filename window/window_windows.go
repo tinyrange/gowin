@@ -46,6 +46,7 @@ const (
 	wmNCLButtonDown = 0x00A1
 	wmDPIChanged    = 0x02E0
 	pmRemove        = 0x0001
+	spiGetWorkArea  = 0x0030
 
 	htCaption = 2
 	gwlStyle  = -16
@@ -225,6 +226,7 @@ var (
 	procAdjustWindowRectExForDPI      = user32.NewProc("AdjustWindowRectExForDpi")
 	procAdjustWindowRectEx            = user32.NewProc("AdjustWindowRectEx")
 	procSetWindowPos                  = user32.NewProc("SetWindowPos")
+	procSystemParametersInfo          = user32.NewProc("SystemParametersInfoW")
 	procGetWindowLongPtr              = user32.NewProc("GetWindowLongPtrW")
 	procSetWindowLongPtr              = user32.NewProc("SetWindowLongPtrW")
 	procReleaseCapture                = user32.NewProc("ReleaseCapture")
@@ -677,6 +679,14 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	}
 
 	clearLastError()
+	windowWidth := windowRect.right - windowRect.left
+	windowHeight := windowRect.bottom - windowRect.top
+	var workArea rect
+	if result, _, _ := procSystemParametersInfo.Call(
+		spiGetWorkArea, 0, uintptr(unsafe.Pointer(&workArea)), 0,
+	); result != 0 {
+		windowWidth, windowHeight = clampWindowSize(windowWidth, windowHeight, workArea)
+	}
 	ret, _, _ := procCreateWindowEx.Call(
 		0,
 		uintptr(unsafe.Pointer(windowClass)),
@@ -684,8 +694,8 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 		uintptr(style),
 		cwUseDefault,
 		cwUseDefault,
-		uintptr(windowRect.right-windowRect.left),
-		uintptr(windowRect.bottom-windowRect.top),
+		uintptr(windowWidth),
+		uintptr(windowHeight),
 		0,
 		0,
 		uintptr(moduleHandle()),
@@ -704,6 +714,24 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	}
 
 	return win, hdc(dcRet), nil
+}
+
+func clampWindowSize(width, height int32, workArea rect) (int32, int32) {
+	availableWidth := workArea.right - workArea.left
+	availableHeight := workArea.bottom - workArea.top
+	if availableWidth > 0 && width > availableWidth {
+		width = availableWidth
+	}
+	if availableHeight > 0 && height > availableHeight {
+		height = availableHeight
+	}
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	return width, height
 }
 
 func logicalPixelsToPhysical(value int, dpi uint32) int32 {
