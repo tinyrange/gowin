@@ -35,10 +35,14 @@ type NSRect struct {
 const (
 	nsApplicationActivationPolicyRegular = 0
 
-	nsWindowStyleTitled      = 1 << 0
-	nsWindowStyleClosable    = 1 << 1
-	nsWindowStyleMiniaturize = 1 << 2
-	nsWindowStyleResizable   = 1 << 3
+	nsWindowStyleTitled              = 1 << 0
+	nsWindowStyleClosable            = 1 << 1
+	nsWindowStyleMiniaturize         = 1 << 2
+	nsWindowStyleResizable           = 1 << 3
+	nsWindowStyleFullSizeContentView = 1 << 15
+
+	nsWindowTitleVisible = 0
+	nsWindowTitleHidden  = 1
 
 	nsBackingStoreBuffered = 2
 
@@ -89,7 +93,9 @@ type Cocoa struct {
 	// URL handler for custom URL scheme events (e.g., crumblecracker://)
 	urlHandler func(url string)
 
-	cursorCaptured bool
+	cursorCaptured     bool
+	integratedTitleBar bool
+	lastMouseDownEvent objc.ID
 }
 
 // Global URL queue for Apple Events callbacks (accessed from Objective-C runtime)
@@ -123,6 +129,12 @@ var (
 	selInitWithContentRect       objc.SEL
 	selMakeKeyAndOrderFront      objc.SEL
 	selSetTitle                  objc.SEL
+	selStyleMask                 objc.SEL
+	selSetStyleMask              objc.SEL
+	selSetTitleVisibility        objc.SEL
+	selSetTitlebarTransparent    objc.SEL
+	selPerformWindowDrag         objc.SEL
+	selRetain                    objc.SEL
 	selSetAcceptsMouseMoved      objc.SEL
 	selSetReleasedWhenClosed     objc.SEL
 	selCenter                    objc.SEL
@@ -376,6 +388,44 @@ func (c *Cocoa) SetCursorCaptured(captured bool) {
 	}
 }
 
+func (c *Cocoa) SetIntegratedTitleBar(enabled bool) bool {
+	if c.window == 0 {
+		return false
+	}
+	style := objc.Send[uint64](c.window, selStyleMask)
+	if enabled {
+		style |= uint64(nsWindowStyleFullSizeContentView)
+		c.window.Send(selSetTitleVisibility, nsWindowTitleHidden)
+		c.window.Send(selSetTitlebarTransparent, true)
+	} else {
+		style &^= uint64(nsWindowStyleFullSizeContentView)
+		c.window.Send(selSetTitleVisibility, nsWindowTitleVisible)
+		c.window.Send(selSetTitlebarTransparent, false)
+	}
+	c.window.Send(selSetStyleMask, style)
+	c.integratedTitleBar = enabled
+	c.updateDrawableIfNeeded()
+	return true
+}
+
+func (c *Cocoa) IntegratedTitleBarInsets() TitleBarInsets {
+	if !c.integratedTitleBar {
+		return TitleBarInsets{}
+	}
+	return TitleBarInsets{Left: 78, Right: 12, Height: 28}
+}
+
+func (c *Cocoa) BeginWindowDrag() bool {
+	if c.window == 0 || !c.integratedTitleBar || c.lastMouseDownEvent == 0 {
+		return false
+	}
+	event := c.lastMouseDownEvent
+	c.lastMouseDownEvent = 0
+	c.window.Send(selPerformWindowDrag, event)
+	event.Send(selRelease)
+	return true
+}
+
 // Close tears down the GL context and window.
 func (c *Cocoa) Close() {
 	if c.cursorCaptured {
@@ -385,6 +435,10 @@ func (c *Cocoa) Close() {
 		objc.ID(objc.GetClass("NSOpenGLContext")).Send(selClearCurrentContext)
 		c.ctx.Send(selRelease)
 		c.ctx = 0
+	}
+	if c.lastMouseDownEvent != 0 {
+		c.lastMouseDownEvent.Send(selRelease)
+		c.lastMouseDownEvent = 0
 	}
 	if c.window != 0 {
 		c.window.Send(selRelease)
@@ -551,6 +605,12 @@ func loadSelectors() {
 	selInitWithContentRect = objc.RegisterName("initWithContentRect:styleMask:backing:defer:")
 	selMakeKeyAndOrderFront = objc.RegisterName("makeKeyAndOrderFront:")
 	selSetTitle = objc.RegisterName("setTitle:")
+	selStyleMask = objc.RegisterName("styleMask")
+	selSetStyleMask = objc.RegisterName("setStyleMask:")
+	selSetTitleVisibility = objc.RegisterName("setTitleVisibility:")
+	selSetTitlebarTransparent = objc.RegisterName("setTitlebarAppearsTransparent:")
+	selPerformWindowDrag = objc.RegisterName("performWindowDragWithEvent:")
+	selRetain = objc.RegisterName("retain")
 	selSetAcceptsMouseMoved = objc.RegisterName("setAcceptsMouseMovedEvents:")
 	selSetReleasedWhenClosed = objc.RegisterName("setReleasedWhenClosed:")
 	selCenter = objc.RegisterName("center")
@@ -857,6 +917,12 @@ func (c *Cocoa) processEvent(ev objc.ID) {
 		c.setKeyDown(key, isDown)
 
 	case nsEventTypeLeftMouseDown, nsEventTypeRightMouseDown, nsEventTypeOtherMouseDown:
+		if etype == nsEventTypeLeftMouseDown {
+			if c.lastMouseDownEvent != 0 {
+				c.lastMouseDownEvent.Send(selRelease)
+			}
+			c.lastMouseDownEvent = ev.Send(selRetain)
+		}
 		buttonNum := int64(objc.Send[uint64](ev, selEventButtonNum))
 		if button, ok := cocoaButtonNumberToButton(buttonNum); ok {
 			c.buttonStates[button] = ButtonStatePressed

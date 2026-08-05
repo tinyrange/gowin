@@ -31,6 +31,24 @@ type SystemKeyCaptureSupport interface {
 	SetSystemKeyCaptured(captured bool)
 }
 
+// TitleBarInsets describes the logical-pixel area reserved for native window
+// controls when application content is extended into the system title bar.
+type TitleBarInsets struct {
+	Left   float32
+	Right  float32
+	Height float32
+}
+
+// IntegratedTitleBarSupport is implemented when Gowin can preserve native
+// window controls while extending the client surface into the title bar.
+// BeginWindowDrag should be called for a primary-button press in an
+// application-defined draggable region.
+type IntegratedTitleBarSupport interface {
+	SetIntegratedTitleBar(enabled bool) bool
+	IntegratedTitleBarInsets() TitleBarInsets
+	BeginWindowDrag() bool
+}
+
 // DockMenuItem represents an item in the dock menu (macOS only)
 type DockMenuItem struct {
 	Title     string

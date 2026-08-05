@@ -82,3 +82,25 @@ func TestReleaseCapturedKeysReleasesEveryHeldKey(t *testing.T) {
 		}
 	}
 }
+
+func TestClampWindowSizeToWorkArea(t *testing.T) {
+	workArea := rect{left: 10, top: 20, right: 1034, bottom: 788}
+	if width, height := clampWindowSize(1800, 1125, workArea); width != 1024 || height != 768 {
+		t.Fatalf("clamped window = %dx%d, want 1024x768", width, height)
+	}
+	if width, height := clampWindowSize(800, 600, workArea); width != 800 || height != 600 {
+		t.Fatalf("already fitting window = %dx%d, want 800x600", width, height)
+	}
+}
+
+func TestMaximizedIntegratedWindowUsesWorkArea(t *testing.T) {
+	monitor := monitorInfo{
+		monitor: rect{left: 0, top: 0, right: 1920, bottom: 1080},
+		work:    rect{left: 0, top: 0, right: 1920, bottom: 1040},
+	}
+	bounds := minMaxInfo{}
+	applyMaximizedWorkArea(&bounds, monitor)
+	if bounds.maxPosition != (point{x: 0, y: 0}) || bounds.maxSize != (point{x: 1920, y: 1040}) {
+		t.Fatalf("maximized bounds = position %+v size %+v", bounds.maxPosition, bounds.maxSize)
+	}
+}

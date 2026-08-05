@@ -20,37 +20,48 @@ const (
 	csVRedraw = 0x0001
 
 	wsOverlappedWindow = 0x00CF0000
+	wsCaption          = 0x00C00000
 	wsClipSiblings     = 0x04000000
 	wsClipChildren     = 0x02000000
 	swShow             = 5
 
-	wmClose       = 0x0010
-	wmDestroy     = 0x0002
-	wmKillFocus   = 0x0008
-	wmKeyDown     = 0x0100
-	wmKeyUp       = 0x0101
-	wmSysKeyDown  = 0x0104
-	wmSysKeyUp    = 0x0105
-	wmChar        = 0x0102
-	wmMouseMove   = 0x0200
-	wmLButtonDown = 0x0201
-	wmLButtonUp   = 0x0202
-	wmRButtonDown = 0x0204
-	wmRButtonUp   = 0x0205
-	wmMButtonDown = 0x0207
-	wmMButtonUp   = 0x0208
-	wmMouseWheel  = 0x020A
-	wmXButtonDown = 0x020B
-	wmXButtonUp   = 0x020C
-	wmDPIChanged  = 0x02E0
-	pmRemove      = 0x0001
+	wmClose                 = 0x0010
+	wmDestroy               = 0x0002
+	wmKillFocus             = 0x0008
+	wmGetMinMaxInfo         = 0x0024
+	wmKeyDown               = 0x0100
+	wmKeyUp                 = 0x0101
+	wmSysKeyDown            = 0x0104
+	wmSysKeyUp              = 0x0105
+	wmChar                  = 0x0102
+	wmMouseMove             = 0x0200
+	wmLButtonDown           = 0x0201
+	wmLButtonUp             = 0x0202
+	wmRButtonDown           = 0x0204
+	wmRButtonUp             = 0x0205
+	wmMButtonDown           = 0x0207
+	wmMButtonUp             = 0x0208
+	wmMouseWheel            = 0x020A
+	wmXButtonDown           = 0x020B
+	wmXButtonUp             = 0x020C
+	wmNCLButtonDown         = 0x00A1
+	wmDPIChanged            = 0x02E0
+	pmRemove                = 0x0001
+	spiGetWorkArea          = 0x0030
+	monitorDefaultToNearest = 0x00000002
 
-	swpNoZOrder   = 0x0004
-	swpNoActivate = 0x0010
-	whKeyboardLL  = 13
-	hcAction      = 0
-	llkhfExtended = 0x01
-	llkhfAltDown  = 0x20
+	htCaption = 2
+	gwlStyle  = -16
+
+	swpNoSize       = 0x0001
+	swpNoMove       = 0x0002
+	swpNoZOrder     = 0x0004
+	swpNoActivate   = 0x0010
+	swpFrameChanged = 0x0020
+	whKeyboardLL    = 13
+	hcAction        = 0
+	llkhfExtended   = 0x01
+	llkhfAltDown    = 0x20
 
 	coinitApartmentThreaded = 0x2
 	clsctxInprocServer      = 0x1
@@ -141,11 +152,26 @@ type point struct {
 	y int32
 }
 
+type minMaxInfo struct {
+	reserved     point
+	maxSize      point
+	maxPosition  point
+	minTrackSize point
+	maxTrackSize point
+}
+
 type rect struct {
 	left   int32
 	top    int32
 	right  int32
 	bottom int32
+}
+
+type monitorInfo struct {
+	cbSize  uint32
+	monitor rect
+	work    rect
+	dwFlags uint32
 }
 
 type windowsGUID struct {
@@ -217,6 +243,13 @@ var (
 	procAdjustWindowRectExForDPI      = user32.NewProc("AdjustWindowRectExForDpi")
 	procAdjustWindowRectEx            = user32.NewProc("AdjustWindowRectEx")
 	procSetWindowPos                  = user32.NewProc("SetWindowPos")
+	procSystemParametersInfo          = user32.NewProc("SystemParametersInfoW")
+	procGetWindowLongPtr              = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtr              = user32.NewProc("SetWindowLongPtrW")
+	procReleaseCapture                = user32.NewProc("ReleaseCapture")
+	procSendMessage                   = user32.NewProc("SendMessageW")
+	procMonitorFromWindow             = user32.NewProc("MonitorFromWindow")
+	procGetMonitorInfo                = user32.NewProc("GetMonitorInfoW")
 	procSetWindowsHookEx              = user32.NewProc("SetWindowsHookExW")
 	procUnhookWindowsHookEx           = user32.NewProc("UnhookWindowsHookEx")
 	procCallNextHookEx                = user32.NewProc("CallNextHookEx")
@@ -306,17 +339,19 @@ func winErr(op string) error {
 }
 
 type winWindow struct {
-	hwnd              hwnd
-	hdc               hdc
-	ctx               hglrc
-	keyboardHook      syscall.Handle
-	running           bool
-	systemKeyCaptured bool
-	hookCapturedKeys  map[Key]bool
-	keyStates         map[Key]KeyState
-	buttonStates      map[Button]ButtonState
-	inputEvents       []InputEvent
-	textInput         string
+	hwnd               hwnd
+	hdc                hdc
+	ctx                hglrc
+	keyboardHook       syscall.Handle
+	running            bool
+	systemKeyCaptured  bool
+	hookCapturedKeys   map[Key]bool
+	keyStates          map[Key]KeyState
+	buttonStates       map[Button]ButtonState
+	inputEvents        []InputEvent
+	textInput          string
+	integratedTitleBar bool
+	windowedStyle      uintptr
 }
 
 func New(title string, width, height int, useCoreProfile bool) (Window, error) {
@@ -436,6 +471,56 @@ func (w *winWindow) SetSystemKeyCaptured(captured bool) {
 		0,
 	)
 	w.keyboardHook = syscall.Handle(hook)
+}
+
+func (w *winWindow) SetIntegratedTitleBar(enabled bool) bool {
+	if w == nil || w.hwnd == 0 {
+		return false
+	}
+	if w.integratedTitleBar == enabled {
+		return true
+	}
+	styleIndex := int32(gwlStyle)
+	clearLastError()
+	style, _, _ := procGetWindowLongPtr.Call(uintptr(w.hwnd), uintptr(styleIndex))
+	if style == 0 && lastError() != 0 {
+		return false
+	}
+	if enabled {
+		w.windowedStyle = style
+		style &^= wsCaption
+	} else if w.windowedStyle != 0 {
+		style = w.windowedStyle
+	}
+	clearLastError()
+	previous, _, _ := procSetWindowLongPtr.Call(uintptr(w.hwnd), uintptr(styleIndex), style)
+	if previous == 0 && lastError() != 0 {
+		return false
+	}
+	procSetWindowPos.Call(
+		uintptr(w.hwnd), 0, 0, 0, 0, 0,
+		swpNoSize|swpNoMove|swpNoZOrder|swpNoActivate|swpFrameChanged,
+	)
+	w.integratedTitleBar = enabled
+	return true
+}
+
+func (w *winWindow) IntegratedTitleBarInsets() TitleBarInsets {
+	if w == nil || !w.integratedTitleBar {
+		return TitleBarInsets{}
+	}
+	// Reserve three standard 46 px caption-button slots for application-drawn
+	// minimize, maximize, and close controls.
+	return TitleBarInsets{Left: 12, Right: 138, Height: 28}
+}
+
+func (w *winWindow) BeginWindowDrag() bool {
+	if w == nil || w.hwnd == 0 || !w.integratedTitleBar {
+		return false
+	}
+	procReleaseCapture.Call()
+	procSendMessage.Call(uintptr(w.hwnd), wmNCLButtonDown, htCaption, 0)
+	return true
 }
 
 func (w *winWindow) releaseCapturedKeys() {
@@ -615,6 +700,14 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	}
 
 	clearLastError()
+	windowWidth := windowRect.right - windowRect.left
+	windowHeight := windowRect.bottom - windowRect.top
+	var workArea rect
+	if result, _, _ := procSystemParametersInfo.Call(
+		spiGetWorkArea, 0, uintptr(unsafe.Pointer(&workArea)), 0,
+	); result != 0 {
+		windowWidth, windowHeight = clampWindowSize(windowWidth, windowHeight, workArea)
+	}
 	ret, _, _ := procCreateWindowEx.Call(
 		0,
 		uintptr(unsafe.Pointer(windowClass)),
@@ -622,8 +715,8 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 		uintptr(style),
 		cwUseDefault,
 		cwUseDefault,
-		uintptr(windowRect.right-windowRect.left),
-		uintptr(windowRect.bottom-windowRect.top),
+		uintptr(windowWidth),
+		uintptr(windowHeight),
 		0,
 		0,
 		uintptr(moduleHandle()),
@@ -633,6 +726,7 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	if win == 0 {
 		return 0, 0, winErr("CreateWindowExW")
 	}
+	resizeWindowForAssignedDPI(win, width, height, style)
 
 	clearLastError()
 	dcRet, _, _ := procGetDC.Call(uintptr(win))
@@ -642,6 +736,66 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	}
 
 	return win, hdc(dcRet), nil
+}
+
+func resizeWindowForAssignedDPI(win hwnd, logicalWidth, logicalHeight int, style uint32) {
+	if win == 0 || procGetDpiForWindow.Find() != nil {
+		return
+	}
+	dpi, _, _ := procGetDpiForWindow.Call(uintptr(win))
+	if dpi == 0 {
+		return
+	}
+	windowRect := rect{
+		right:  logicalPixelsToPhysical(logicalWidth, uint32(dpi)),
+		bottom: logicalPixelsToPhysical(logicalHeight, uint32(dpi)),
+	}
+	if procAdjustWindowRectExForDPI.Find() == nil {
+		procAdjustWindowRectExForDPI.Call(
+			uintptr(unsafe.Pointer(&windowRect)), uintptr(style), 0, 0, dpi,
+		)
+	} else if procAdjustWindowRectEx.Find() == nil {
+		procAdjustWindowRectEx.Call(
+			uintptr(unsafe.Pointer(&windowRect)), uintptr(style), 0, 0,
+		)
+	}
+	windowWidth := windowRect.right - windowRect.left
+	windowHeight := windowRect.bottom - windowRect.top
+	var workArea rect
+	if result, _, _ := procSystemParametersInfo.Call(
+		spiGetWorkArea, 0, uintptr(unsafe.Pointer(&workArea)), 0,
+	); result != 0 {
+		windowWidth, windowHeight = clampWindowSize(windowWidth, windowHeight, workArea)
+		x := workArea.left + (workArea.right-workArea.left-windowWidth)/2
+		y := workArea.top + (workArea.bottom-workArea.top-windowHeight)/2
+		procSetWindowPos.Call(
+			uintptr(win), 0, uintptr(x), uintptr(y), uintptr(windowWidth), uintptr(windowHeight),
+			swpNoZOrder|swpNoActivate,
+		)
+		return
+	}
+	procSetWindowPos.Call(
+		uintptr(win), 0, 0, 0, uintptr(windowWidth), uintptr(windowHeight),
+		swpNoMove|swpNoZOrder|swpNoActivate,
+	)
+}
+
+func clampWindowSize(width, height int32, workArea rect) (int32, int32) {
+	availableWidth := workArea.right - workArea.left
+	availableHeight := workArea.bottom - workArea.top
+	if availableWidth > 0 && width > availableWidth {
+		width = availableWidth
+	}
+	if availableHeight > 0 && height > availableHeight {
+		height = availableHeight
+	}
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	return width, height
 }
 
 func logicalPixelsToPhysical(value int, dpi uint32) int32 {
@@ -960,6 +1114,18 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		if current != nil && current.hwnd == syscall.Handle(hwnd) && current.systemKeyCaptured {
 			current.releaseCapturedKeys()
 		}
+	case wmGetMinMaxInfo:
+		current := currentWin
+		if current != nil && current.hwnd == syscall.Handle(hwnd) && current.integratedTitleBar && lParam != 0 {
+			monitor, _, _ := procMonitorFromWindow.Call(hwnd, monitorDefaultToNearest)
+			info := monitorInfo{cbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
+			if monitor != 0 {
+				if ok, _, _ := procGetMonitorInfo.Call(monitor, uintptr(unsafe.Pointer(&info))); ok != 0 {
+					applyMaximizedWorkArea((*minMaxInfo)(unsafe.Pointer(lParam)), info)
+					return 0
+				}
+			}
+		}
 	case wmDPIChanged:
 		if lParam != 0 && procSetWindowPos.Find() == nil {
 			suggested := (*rect)(unsafe.Pointer(lParam))
@@ -977,6 +1143,16 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	}
 	ret, _, _ := procDefWindowProc.Call(hwnd, msg, wParam, lParam)
 	return ret
+}
+
+func applyMaximizedWorkArea(bounds *minMaxInfo, monitor monitorInfo) {
+	if bounds == nil {
+		return
+	}
+	bounds.maxPosition.x = monitor.work.left - monitor.monitor.left
+	bounds.maxPosition.y = monitor.work.top - monitor.monitor.top
+	bounds.maxSize.x = monitor.work.right - monitor.work.left
+	bounds.maxSize.y = monitor.work.bottom - monitor.work.top
 }
 
 func windowsKeyboardHook(nCode, wParam, lParam uintptr) uintptr {
