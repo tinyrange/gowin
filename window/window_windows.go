@@ -705,6 +705,7 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	if win == 0 {
 		return 0, 0, winErr("CreateWindowExW")
 	}
+	resizeWindowForAssignedDPI(win, width, height, style)
 
 	clearLastError()
 	dcRet, _, _ := procGetDC.Call(uintptr(win))
@@ -714,6 +715,48 @@ func createWindow(title string, width, height int) (win hwnd, dc hdc, err error)
 	}
 
 	return win, hdc(dcRet), nil
+}
+
+func resizeWindowForAssignedDPI(win hwnd, logicalWidth, logicalHeight int, style uint32) {
+	if win == 0 || procGetDpiForWindow.Find() != nil {
+		return
+	}
+	dpi, _, _ := procGetDpiForWindow.Call(uintptr(win))
+	if dpi == 0 {
+		return
+	}
+	windowRect := rect{
+		right:  logicalPixelsToPhysical(logicalWidth, uint32(dpi)),
+		bottom: logicalPixelsToPhysical(logicalHeight, uint32(dpi)),
+	}
+	if procAdjustWindowRectExForDPI.Find() == nil {
+		procAdjustWindowRectExForDPI.Call(
+			uintptr(unsafe.Pointer(&windowRect)), uintptr(style), 0, 0, dpi,
+		)
+	} else if procAdjustWindowRectEx.Find() == nil {
+		procAdjustWindowRectEx.Call(
+			uintptr(unsafe.Pointer(&windowRect)), uintptr(style), 0, 0,
+		)
+	}
+	windowWidth := windowRect.right - windowRect.left
+	windowHeight := windowRect.bottom - windowRect.top
+	var workArea rect
+	if result, _, _ := procSystemParametersInfo.Call(
+		spiGetWorkArea, 0, uintptr(unsafe.Pointer(&workArea)), 0,
+	); result != 0 {
+		windowWidth, windowHeight = clampWindowSize(windowWidth, windowHeight, workArea)
+		x := workArea.left + (workArea.right-workArea.left-windowWidth)/2
+		y := workArea.top + (workArea.bottom-workArea.top-windowHeight)/2
+		procSetWindowPos.Call(
+			uintptr(win), 0, uintptr(x), uintptr(y), uintptr(windowWidth), uintptr(windowHeight),
+			swpNoZOrder|swpNoActivate,
+		)
+		return
+	}
+	procSetWindowPos.Call(
+		uintptr(win), 0, 0, 0, uintptr(windowWidth), uintptr(windowHeight),
+		swpNoMove|swpNoZOrder|swpNoActivate,
+	)
 }
 
 func clampWindowSize(width, height int32, workArea rect) (int32, int32) {
