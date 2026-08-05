@@ -20,37 +20,45 @@ const (
 	csVRedraw = 0x0001
 
 	wsOverlappedWindow = 0x00CF0000
+	wsCaption          = 0x00C00000
 	wsClipSiblings     = 0x04000000
 	wsClipChildren     = 0x02000000
 	swShow             = 5
 
-	wmClose       = 0x0010
-	wmDestroy     = 0x0002
-	wmKillFocus   = 0x0008
-	wmKeyDown     = 0x0100
-	wmKeyUp       = 0x0101
-	wmSysKeyDown  = 0x0104
-	wmSysKeyUp    = 0x0105
-	wmChar        = 0x0102
-	wmMouseMove   = 0x0200
-	wmLButtonDown = 0x0201
-	wmLButtonUp   = 0x0202
-	wmRButtonDown = 0x0204
-	wmRButtonUp   = 0x0205
-	wmMButtonDown = 0x0207
-	wmMButtonUp   = 0x0208
-	wmMouseWheel  = 0x020A
-	wmXButtonDown = 0x020B
-	wmXButtonUp   = 0x020C
-	wmDPIChanged  = 0x02E0
-	pmRemove      = 0x0001
+	wmClose         = 0x0010
+	wmDestroy       = 0x0002
+	wmKillFocus     = 0x0008
+	wmKeyDown       = 0x0100
+	wmKeyUp         = 0x0101
+	wmSysKeyDown    = 0x0104
+	wmSysKeyUp      = 0x0105
+	wmChar          = 0x0102
+	wmMouseMove     = 0x0200
+	wmLButtonDown   = 0x0201
+	wmLButtonUp     = 0x0202
+	wmRButtonDown   = 0x0204
+	wmRButtonUp     = 0x0205
+	wmMButtonDown   = 0x0207
+	wmMButtonUp     = 0x0208
+	wmMouseWheel    = 0x020A
+	wmXButtonDown   = 0x020B
+	wmXButtonUp     = 0x020C
+	wmNCLButtonDown = 0x00A1
+	wmDPIChanged    = 0x02E0
+	pmRemove        = 0x0001
 
-	swpNoZOrder   = 0x0004
-	swpNoActivate = 0x0010
-	whKeyboardLL  = 13
-	hcAction      = 0
-	llkhfExtended = 0x01
-	llkhfAltDown  = 0x20
+	htCaption = 2
+	gwlStyle  = -16
+
+	swpNoSize       = 0x0001
+	swpNoMove       = 0x0002
+	swpNoZOrder     = 0x0004
+	swpNoActivate   = 0x0010
+	swpFrameChanged = 0x0020
+	whKeyboardLL    = 13
+	hcAction        = 0
+	llkhfExtended   = 0x01
+	llkhfAltDown    = 0x20
 
 	coinitApartmentThreaded = 0x2
 	clsctxInprocServer      = 0x1
@@ -217,6 +225,10 @@ var (
 	procAdjustWindowRectExForDPI      = user32.NewProc("AdjustWindowRectExForDpi")
 	procAdjustWindowRectEx            = user32.NewProc("AdjustWindowRectEx")
 	procSetWindowPos                  = user32.NewProc("SetWindowPos")
+	procGetWindowLongPtr              = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtr              = user32.NewProc("SetWindowLongPtrW")
+	procReleaseCapture                = user32.NewProc("ReleaseCapture")
+	procSendMessage                   = user32.NewProc("SendMessageW")
 	procSetWindowsHookEx              = user32.NewProc("SetWindowsHookExW")
 	procUnhookWindowsHookEx           = user32.NewProc("UnhookWindowsHookEx")
 	procCallNextHookEx                = user32.NewProc("CallNextHookEx")
@@ -306,17 +318,19 @@ func winErr(op string) error {
 }
 
 type winWindow struct {
-	hwnd              hwnd
-	hdc               hdc
-	ctx               hglrc
-	keyboardHook      syscall.Handle
-	running           bool
-	systemKeyCaptured bool
-	hookCapturedKeys  map[Key]bool
-	keyStates         map[Key]KeyState
-	buttonStates      map[Button]ButtonState
-	inputEvents       []InputEvent
-	textInput         string
+	hwnd               hwnd
+	hdc                hdc
+	ctx                hglrc
+	keyboardHook       syscall.Handle
+	running            bool
+	systemKeyCaptured  bool
+	hookCapturedKeys   map[Key]bool
+	keyStates          map[Key]KeyState
+	buttonStates       map[Button]ButtonState
+	inputEvents        []InputEvent
+	textInput          string
+	integratedTitleBar bool
+	windowedStyle      uintptr
 }
 
 func New(title string, width, height int, useCoreProfile bool) (Window, error) {
@@ -436,6 +450,54 @@ func (w *winWindow) SetSystemKeyCaptured(captured bool) {
 		0,
 	)
 	w.keyboardHook = syscall.Handle(hook)
+}
+
+func (w *winWindow) SetIntegratedTitleBar(enabled bool) bool {
+	if w == nil || w.hwnd == 0 {
+		return false
+	}
+	if w.integratedTitleBar == enabled {
+		return true
+	}
+	styleIndex := int32(gwlStyle)
+	clearLastError()
+	style, _, _ := procGetWindowLongPtr.Call(uintptr(w.hwnd), uintptr(styleIndex))
+	if style == 0 && lastError() != 0 {
+		return false
+	}
+	if enabled {
+		w.windowedStyle = style
+		style &^= wsCaption
+	} else if w.windowedStyle != 0 {
+		style = w.windowedStyle
+	}
+	clearLastError()
+	previous, _, _ := procSetWindowLongPtr.Call(uintptr(w.hwnd), uintptr(styleIndex), style)
+	if previous == 0 && lastError() != 0 {
+		return false
+	}
+	procSetWindowPos.Call(
+		uintptr(w.hwnd), 0, 0, 0, 0, 0,
+		swpNoSize|swpNoMove|swpNoZOrder|swpNoActivate|swpFrameChanged,
+	)
+	w.integratedTitleBar = enabled
+	return true
+}
+
+func (w *winWindow) IntegratedTitleBarInsets() TitleBarInsets {
+	if w == nil || !w.integratedTitleBar {
+		return TitleBarInsets{}
+	}
+	return TitleBarInsets{Left: 12, Right: 12, Height: 28}
+}
+
+func (w *winWindow) BeginWindowDrag() bool {
+	if w == nil || w.hwnd == 0 || !w.integratedTitleBar {
+		return false
+	}
+	procReleaseCapture.Call()
+	procSendMessage.Call(uintptr(w.hwnd), wmNCLButtonDown, htCaption, 0)
+	return true
 }
 
 func (w *winWindow) releaseCapturedKeys() {
