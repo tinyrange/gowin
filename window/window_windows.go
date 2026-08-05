@@ -509,7 +509,9 @@ func (w *winWindow) IntegratedTitleBarInsets() TitleBarInsets {
 	if w == nil || !w.integratedTitleBar {
 		return TitleBarInsets{}
 	}
-	return TitleBarInsets{Left: 12, Right: 12, Height: 28}
+	// Reserve three standard 46 px caption-button slots for application-drawn
+	// minimize, maximize, and close controls.
+	return TitleBarInsets{Left: 12, Right: 138, Height: 28}
 }
 
 func (w *winWindow) BeginWindowDrag() bool {
