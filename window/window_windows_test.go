@@ -92,3 +92,15 @@ func TestClampWindowSizeToWorkArea(t *testing.T) {
 		t.Fatalf("already fitting window = %dx%d, want 800x600", width, height)
 	}
 }
+
+func TestMaximizedIntegratedWindowUsesWorkArea(t *testing.T) {
+	monitor := monitorInfo{
+		monitor: rect{left: 0, top: 0, right: 1920, bottom: 1080},
+		work:    rect{left: 0, top: 0, right: 1920, bottom: 1040},
+	}
+	bounds := minMaxInfo{}
+	applyMaximizedWorkArea(&bounds, monitor)
+	if bounds.maxPosition != (point{x: 0, y: 0}) || bounds.maxSize != (point{x: 1920, y: 1040}) {
+		t.Fatalf("maximized bounds = position %+v size %+v", bounds.maxPosition, bounds.maxSize)
+	}
+}

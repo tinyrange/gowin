@@ -25,28 +25,30 @@ const (
 	wsClipChildren     = 0x02000000
 	swShow             = 5
 
-	wmClose         = 0x0010
-	wmDestroy       = 0x0002
-	wmKillFocus     = 0x0008
-	wmKeyDown       = 0x0100
-	wmKeyUp         = 0x0101
-	wmSysKeyDown    = 0x0104
-	wmSysKeyUp      = 0x0105
-	wmChar          = 0x0102
-	wmMouseMove     = 0x0200
-	wmLButtonDown   = 0x0201
-	wmLButtonUp     = 0x0202
-	wmRButtonDown   = 0x0204
-	wmRButtonUp     = 0x0205
-	wmMButtonDown   = 0x0207
-	wmMButtonUp     = 0x0208
-	wmMouseWheel    = 0x020A
-	wmXButtonDown   = 0x020B
-	wmXButtonUp     = 0x020C
-	wmNCLButtonDown = 0x00A1
-	wmDPIChanged    = 0x02E0
-	pmRemove        = 0x0001
-	spiGetWorkArea  = 0x0030
+	wmClose                 = 0x0010
+	wmDestroy               = 0x0002
+	wmKillFocus             = 0x0008
+	wmGetMinMaxInfo         = 0x0024
+	wmKeyDown               = 0x0100
+	wmKeyUp                 = 0x0101
+	wmSysKeyDown            = 0x0104
+	wmSysKeyUp              = 0x0105
+	wmChar                  = 0x0102
+	wmMouseMove             = 0x0200
+	wmLButtonDown           = 0x0201
+	wmLButtonUp             = 0x0202
+	wmRButtonDown           = 0x0204
+	wmRButtonUp             = 0x0205
+	wmMButtonDown           = 0x0207
+	wmMButtonUp             = 0x0208
+	wmMouseWheel            = 0x020A
+	wmXButtonDown           = 0x020B
+	wmXButtonUp             = 0x020C
+	wmNCLButtonDown         = 0x00A1
+	wmDPIChanged            = 0x02E0
+	pmRemove                = 0x0001
+	spiGetWorkArea          = 0x0030
+	monitorDefaultToNearest = 0x00000002
 
 	htCaption = 2
 	gwlStyle  = -16
@@ -150,11 +152,26 @@ type point struct {
 	y int32
 }
 
+type minMaxInfo struct {
+	reserved     point
+	maxSize      point
+	maxPosition  point
+	minTrackSize point
+	maxTrackSize point
+}
+
 type rect struct {
 	left   int32
 	top    int32
 	right  int32
 	bottom int32
+}
+
+type monitorInfo struct {
+	cbSize  uint32
+	monitor rect
+	work    rect
+	dwFlags uint32
 }
 
 type windowsGUID struct {
@@ -231,6 +248,8 @@ var (
 	procSetWindowLongPtr              = user32.NewProc("SetWindowLongPtrW")
 	procReleaseCapture                = user32.NewProc("ReleaseCapture")
 	procSendMessage                   = user32.NewProc("SendMessageW")
+	procMonitorFromWindow             = user32.NewProc("MonitorFromWindow")
+	procGetMonitorInfo                = user32.NewProc("GetMonitorInfoW")
 	procSetWindowsHookEx              = user32.NewProc("SetWindowsHookExW")
 	procUnhookWindowsHookEx           = user32.NewProc("UnhookWindowsHookEx")
 	procCallNextHookEx                = user32.NewProc("CallNextHookEx")
@@ -1093,6 +1112,18 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		if current != nil && current.hwnd == syscall.Handle(hwnd) && current.systemKeyCaptured {
 			current.releaseCapturedKeys()
 		}
+	case wmGetMinMaxInfo:
+		current := currentWin
+		if current != nil && current.hwnd == syscall.Handle(hwnd) && current.integratedTitleBar && lParam != 0 {
+			monitor, _, _ := procMonitorFromWindow.Call(hwnd, monitorDefaultToNearest)
+			info := monitorInfo{cbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
+			if monitor != 0 {
+				if ok, _, _ := procGetMonitorInfo.Call(monitor, uintptr(unsafe.Pointer(&info))); ok != 0 {
+					applyMaximizedWorkArea((*minMaxInfo)(unsafe.Pointer(lParam)), info)
+					return 0
+				}
+			}
+		}
 	case wmDPIChanged:
 		if lParam != 0 && procSetWindowPos.Find() == nil {
 			suggested := (*rect)(unsafe.Pointer(lParam))
@@ -1110,6 +1141,16 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	}
 	ret, _, _ := procDefWindowProc.Call(hwnd, msg, wParam, lParam)
 	return ret
+}
+
+func applyMaximizedWorkArea(bounds *minMaxInfo, monitor monitorInfo) {
+	if bounds == nil {
+		return
+	}
+	bounds.maxPosition.x = monitor.work.left - monitor.monitor.left
+	bounds.maxPosition.y = monitor.work.top - monitor.monitor.top
+	bounds.maxSize.x = monitor.work.right - monitor.work.left
+	bounds.maxSize.y = monitor.work.bottom - monitor.work.top
 }
 
 func windowsKeyboardHook(nCode, wParam, lParam uintptr) uintptr {
