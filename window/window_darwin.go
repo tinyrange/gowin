@@ -15,6 +15,8 @@ import (
 	"github.com/tinyrange/gowin/gl"
 )
 
+var errDarwinOpenGLPixelFormatUnavailable = errors.New("failed to create pixel format")
+
 // NS geometry mirrors (keep alignment explicit).
 type NSPoint struct {
 	X float64
@@ -563,7 +565,7 @@ func (c *Cocoa) makeGLContext(useCoreProfile bool) error {
 	pf := objc.ID(pfClass).Send(selAlloc)
 	pf = pf.Send(selInitWithAttributes, unsafe.Pointer(&attrs[0]))
 	if pf == 0 {
-		return errors.New("failed to create pixel format")
+		return errDarwinOpenGLPixelFormatUnavailable
 	}
 
 	ctxClass := objc.GetClass("NSOpenGLContext")

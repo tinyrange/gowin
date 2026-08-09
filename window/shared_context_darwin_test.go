@@ -4,6 +4,7 @@ package window
 
 import (
 	"bytes"
+	"errors"
 	"runtime"
 	"testing"
 	"unsafe"
@@ -16,6 +17,9 @@ func TestSharedOpenGLContextPublishesTexture(t *testing.T) {
 	defer runtime.UnlockOSThread()
 
 	win, err := New("Gowin shared-context integration", 64, 64, true)
+	if errors.Is(err, errDarwinOpenGLPixelFormatUnavailable) {
+		t.Skip("accelerated OpenGL is unavailable")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
