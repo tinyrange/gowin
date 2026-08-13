@@ -15,6 +15,8 @@ import (
 	"github.com/tinyrange/gowin/gl"
 )
 
+var errDarwinOpenGLPixelFormatUnavailable = errors.New("failed to create pixel format")
+
 // NS geometry mirrors (keep alignment explicit).
 type NSPoint struct {
 	X float64
@@ -63,12 +65,17 @@ const (
 
 // Cocoa exposes objects as pointers (Objective-C id).
 type Cocoa struct {
-	app     objc.ID
-	window  objc.ID
-	view    objc.ID
-	ctx     objc.ID
-	pool    objc.ID
-	running bool
+	app         objc.ID
+	window      objc.ID
+	view        objc.ID
+	ctx         objc.ID
+	pixelFormat objc.ID
+	pool        objc.ID
+	running     bool
+
+	sharedMu       sync.Mutex
+	sharedContexts map[*darwinSharedOpenGLContext]struct{}
+	closing        bool
 
 	// Cached drawable metrics to detect resizes and keep the NSOpenGLContext
 	// backing store in sync with the view size.
@@ -243,22 +250,27 @@ const (
 func New(title string, width, height int, useCoreProfile bool) (Window, error) {
 	runtime.LockOSThread()
 	if err := ensureRuntime(); err != nil {
+		runtime.UnlockOSThread()
 		return nil, err
 	}
 
 	c := &Cocoa{
-		running:      true,
-		keyStates:    make(map[Key]KeyState),
-		buttonStates: make(map[Button]ButtonState),
-		inputEvents:  make([]InputEvent, 0, 256),
+		running:        true,
+		keyStates:      make(map[Key]KeyState),
+		buttonStates:   make(map[Button]ButtonState),
+		inputEvents:    make([]InputEvent, 0, 256),
+		sharedContexts: make(map[*darwinSharedOpenGLContext]struct{}),
 	}
 	if err := c.bootstrapApp(); err != nil {
+		c.Close()
 		return nil, err
 	}
 	if err := c.makeWindow(title, width, height); err != nil {
+		c.Close()
 		return nil, err
 	}
 	if err := c.makeGLContext(useCoreProfile); err != nil {
+		c.Close()
 		return nil, err
 	}
 	return c, nil
@@ -428,6 +440,21 @@ func (c *Cocoa) BeginWindowDrag() bool {
 
 // Close tears down the GL context and window.
 func (c *Cocoa) Close() {
+	c.sharedMu.Lock()
+	if c.closing {
+		c.sharedMu.Unlock()
+		return
+	}
+	c.closing = true
+	shared := make([]*darwinSharedOpenGLContext, 0, len(c.sharedContexts))
+	for context := range c.sharedContexts {
+		shared = append(shared, context)
+	}
+	c.sharedMu.Unlock()
+	for _, context := range shared {
+		_ = context.Close()
+	}
+
 	if c.cursorCaptured {
 		c.SetCursorCaptured(false)
 	}
@@ -439,6 +466,10 @@ func (c *Cocoa) Close() {
 	if c.lastMouseDownEvent != 0 {
 		c.lastMouseDownEvent.Send(selRelease)
 		c.lastMouseDownEvent = 0
+	}
+	if c.pixelFormat != 0 {
+		c.pixelFormat.Send(selRelease)
+		c.pixelFormat = 0
 	}
 	if c.window != 0 {
 		c.window.Send(selRelease)
@@ -534,14 +565,14 @@ func (c *Cocoa) makeGLContext(useCoreProfile bool) error {
 	pf := objc.ID(pfClass).Send(selAlloc)
 	pf = pf.Send(selInitWithAttributes, unsafe.Pointer(&attrs[0]))
 	if pf == 0 {
-		return errors.New("failed to create pixel format")
+		return errDarwinOpenGLPixelFormatUnavailable
 	}
-	defer pf.Send(selRelease)
 
 	ctxClass := objc.GetClass("NSOpenGLContext")
 	ctx := objc.ID(ctxClass).Send(selAlloc)
 	ctx = ctx.Send(selInitWithFormat, pf, objc.ID(0))
 	if ctx == 0 {
+		pf.Send(selRelease)
 		return errors.New("failed to create gl context")
 	}
 
@@ -553,6 +584,7 @@ func (c *Cocoa) makeGLContext(useCoreProfile bool) error {
 	ctx.Send(selSetValuesForParameter, unsafe.Pointer(&swap), nsOpenGLCPSwapInterval)
 
 	c.ctx = ctx
+	c.pixelFormat = pf
 	return nil
 }
 

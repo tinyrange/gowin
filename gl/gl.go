@@ -289,6 +289,26 @@ type OpenGL interface {
 	DeleteTextures(n int32, textures *uint32)
 }
 
+// Sync identifies an OpenGL synchronization object. Sync objects may be shared
+// between contexts in the same share group.
+type Sync uintptr
+
+const (
+	// SyncGPUCommandsComplete creates a fence after all preceding GL commands.
+	SyncGPUCommandsComplete = 0x9117
+	// TimeoutIgnored asks WaitSync to wait without a client-side timeout.
+	TimeoutIgnored = ^uint64(0)
+)
+
+// Synchronization is implemented by OpenGL bindings that provide explicit GPU
+// ordering between shared contexts.
+type Synchronization interface {
+	FenceSync(condition, flags uint32) Sync
+	WaitSync(sync Sync, flags uint32, timeout uint64)
+	DeleteSync(sync Sync)
+	Flush()
+}
+
 func gostring(ptr *byte) string {
 	if ptr == nil {
 		return ""
